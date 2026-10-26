@@ -1,0 +1,5 @@
+# Runtime dependencies of the API (the Docker image installs only these).
+numpy==2.5.4
+faiss-cpu==1.15.1
+fastapi==0.159.1
+uvicorn==0.54.0

@@ -1,0 +1,9 @@
+# Offline pipeline (images, ONNX embeddings, evaluation) and tests.
+-r requirements.txt
+onnxruntime==1.31.0
+tokenizers==0.23.3
+huggingface_hub==2.2.0
+pillow==13.0.0
+httpx==0.28.1
+scikit-learn==1.9.1
+pytest==9.1.1
