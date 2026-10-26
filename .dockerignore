@@ -1,0 +1,7 @@
+*
+!app.py
+!requirements.txt
+!similarity/**
+!data/archive.zip
+!artifacts/embeddings/*.npz
+**/__pycache__
