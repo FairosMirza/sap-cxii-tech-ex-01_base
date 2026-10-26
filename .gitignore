@@ -2,6 +2,12 @@
 data/*.json
 data/*.ldjson
 
+## Local-only artifacts (artifacts/embeddings/ is committed: the Docker build needs it)
+.venv/
+models/
+data/images/
+artifacts/index/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
