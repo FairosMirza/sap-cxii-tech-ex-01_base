@@ -3,6 +3,7 @@ import zipfile
 
 import pytest
 
+from similarity.build import load_aligned
 from similarity.data import (
     extract_colors,
     load_products,
@@ -92,6 +93,13 @@ def test_parse_record_derives_list_price_from_discount():
     product = parse_record({"uniq_id": "u1", "asin": "A", "product_name": "Kurta", "sales_price": "500.00",
                             "discount_percentage": "50%", "rating": "4.0", "weight": "999999999"})
     assert (product.sales_price, product.list_price, product.weight_g) == (500.0, 1000.0, None)
+
+
+def test_build_rejects_git_lfs_pointer_files(tmp_path):
+    pointer = tmp_path / "text_minilm.npz"
+    pointer.write_text("version https://git-lfs.github.com/spec/v1\noid sha256:0\nsize 1\n")
+    with pytest.raises(RuntimeError, match="git lfs install && git lfs pull"):
+        load_aligned(pointer, ["a"])
 
 
 def test_load_products_from_zip_infers_brand_and_category(tmp_path):

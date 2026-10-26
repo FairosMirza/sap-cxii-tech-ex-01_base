@@ -29,7 +29,8 @@ def load_aligned(path: Path, ids: list[str]) -> tuple[np.ndarray, np.ndarray] | 
         return None
     with path.open("rb") as handle:
         if handle.read(40).startswith(b"version https://git-lfs"):
-            raise RuntimeError(f"{path} is a Git LFS pointer, not the data: install git-lfs and run `git lfs pull`")
+            raise RuntimeError(f"{path} is a Git LFS pointer, not the data: install git-lfs, then run "
+                               "`git lfs install && git lfs pull`")
     with np.load(path, allow_pickle=False) as data:
         position = {pid: i for i, pid in enumerate(data["ids"].tolist())}
         rows = np.array([position.get(pid, -1) for pid in ids])

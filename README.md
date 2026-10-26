@@ -18,11 +18,11 @@ Results:
 
 - **Quality:** 73.5% of queries get at least one co-purchased product in the top 10 (name text alone: 69.0%). 96% of results share the query's category and 99% its shopper segment.
 - **Speed:** HNSW with exact re-ranking matches exact search (recall@10 = 1.000) at 0.34 ms vs 1.13 ms per query. On 1M synthetic vectors it takes 0.21 ms vs 7.9 ms for brute force.
-- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 6 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests. 73 tests pass, and CI builds, deploys and tests everything on every push.
+- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 6 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests. 74 tests pass, and CI builds, deploys and tests everything on every push.
 
 ## Quick start
 
-**Clone with Git LFS.** The precomputed embeddings are stored with [Git LFS](https://git-lfs.com). Install it before cloning (`brew install git-lfs` or `apt install git-lfs`, then `git lfs install`). If you already cloned without it, run `git lfs pull`.
+**Clone with Git LFS.** The precomputed embeddings are stored with [Git LFS](https://git-lfs.com). Install it before cloning (`brew install git-lfs` or `apt install git-lfs`, then `git lfs install`). If you already cloned without it, run `git lfs install && git lfs pull` in the clone.
 
 **Docker**
 

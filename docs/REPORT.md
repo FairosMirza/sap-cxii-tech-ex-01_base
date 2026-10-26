@@ -36,7 +36,7 @@ Appendix: [Technical details](#appendix-technical-details)
 |---|---|
 | Quality | 73.5% of queries get at least one co-purchased product in the top 10. 96% of results share the query's category and 99% its shopper segment. |
 | Speed | 0.34 ms per query with HNSW, which returns the same top 10 as exact search (recall@10 = 1.000). On 1M vectors: 0.21 ms vs 7.9 ms for brute force. |
-| Robustness | 73 automated tests pass. The service runs on Kubernetes as 2 replicas, and a rolling restart under continuous traffic produced **0 failed requests** out of 2,990. |
+| Robustness | 74 automated tests pass. The service runs on Kubernetes as 2 replicas, and a rolling restart under continuous traffic produced **0 failed requests** out of 2,990. |
 | Deployment | A multi-stage Docker image (458 MB) builds in about 1 minute. It runs as a non-root user on a read-only filesystem. CI builds it, deploys it to Kubernetes and tests it on every push. |
 
 ---
@@ -103,7 +103,7 @@ flowchart TB
 | Embeddings | `make embeddings` | names, images | `artifacts/embeddings/` (44 MB) | ~8 min on CPU | once per catalogue |
 | Feature store | `make index`, or Docker stage 1 | zip + embeddings | `artifacts/index/` | 2–4 s | every build |
 | Serve | `make serve`, or the container | feature store | in-memory HNSW index + API | ready in ~6 s | per pod |
-| Test | `make test` | code + feature store | 73 tests | ~10 s | every change |
+| Test | `make test` | code + feature store | 74 tests | ~10 s | every change |
 | Deploy | `make kind-deploy` | image | 2 replicas | ~20 s rollout | per release |
 | Smoke | `make kind-smoke` | running service | API checks + zero-downtime check | ~65 s | per release |
 
@@ -136,7 +136,7 @@ flowchart LR
   P["push / PR"] --> T
   subgraph T["job: test"]
     direction TB
-    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store"] --> T4["pytest: 73 tests"]
+    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store"] --> T4["pytest: 74 tests"]
   end
   T --> D
   subgraph D["job: deploy"]
@@ -296,11 +296,11 @@ The other options are better suited elsewhere:
 
 All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), kind v0.33 with Kubernetes v1.37.
 
-### 8.1 Automated tests: 73 passing (`make test`)
+### 8.1 Automated tests: 74 passing (`make test`)
 
 | Suite | What it proves |
 |---|---|
-| `test_data.py` (37) | Every parsing rule: prices, units, segments, colours, image URLs, zip loading, brand and category inference |
+| `test_data.py` (38) | Every parsing rule: prices, units, segments, colours, image URLs, zip loading, brand and category inference, the Git LFS pointer guard |
 | `test_engine.py` (15) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact |
 | `test_api.py` (17) | 200 / 404 / 422 / 503 / 500 responses, the weights and method parameters, the explanation endpoint |
 | `test_integration.py` (4) | On the real data: the Part 1 function, HNSW recall ≥ 0.98, sensible neighbours, the API serving the real index |
@@ -313,7 +313,8 @@ All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), k
 | Image contents | 458 MB: Debian slim + Python ≈ 160 MB, Python packages 123 MB, feature store 56 MB, code < 0.1 MB |
 | Run with `--read-only --cap-drop ALL` | Ready in ~6 s, ~270 MiB memory, runs as UID 10001 |
 | Endpoints | 200 for a known product; 404 unknown product; 422 for `num_similar=0`, `num_similar=1000` and bad weights |
-| Clone without Git LFS | The build stops with a clear message to run `git lfs pull` |
+| Clone without Git LFS | The build stops with a clear message to run `git lfs install && git lfs pull` |
+| Fresh clone from GitHub | Without LFS the build stops at the guard as intended; after `git lfs install && git lfs pull` the clone builds and returns the same results |
 
 ### 8.3 Kubernetes
 
@@ -328,7 +329,14 @@ All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), k
 
 ### 8.4 Continuous integration
 
-Every push runs the [workflow](../.github/workflows/ci.yml) shown in [§3.3](#33-cicd-workflow-github-actions): tests, Docker build, container smoke test, kind deployment and the zero-downtime test. The status badge is in the [README](../README.md).
+Every push runs the [workflow](../.github/workflows/ci.yml) shown in [§3.3](#33-cicd-workflow-github-actions). The status badge is in the [README](../README.md).
+
+The first run, on the commit that published the repo, passed:
+
+| Job | Duration | Result |
+|---|---|---|
+| Tests (unit, API, integration) | 1 min 1 s | 73 passed in 14 s (the LFS-guard test was added after this run) |
+| Docker image + Kubernetes (kind) | 3 min 6 s | image built; container smoke test OK; rolled out on kind; functional checks OK; **2,600 / 2,600** requests succeeded during the rolling restart (p50 1.9 ms, p99 16 ms) |
 
 ---
 
@@ -343,7 +351,7 @@ Every push runs the [workflow](../.github/workflows/ci.yml) shown in [§3.3](#33
 | FAISS and scikit-learn each bundle their own OpenMP library | inspecting loaded libraries | scikit-learn kept out of the API | one OpenMP runtime in production |
 | Rolling restarts dropped 0.47% of requests | in-cluster load test | `preStop` sleep of 5 s | 0 failed requests |
 | A tie-break test passed for the wrong reason (ids happened to sort the same way) | test review | test data where id order and rating order disagree | the test now proves the rating tie-break |
-| A clone without Git LFS gives placeholder files | review of the LFS change | the build detects them and explains the fix | clear error instead of a confusing crash |
+| A clone without Git LFS gives placeholder files | review of the LFS change, then a fresh clone from GitHub | the build detects them and explains the fix (`git lfs install && git lfs pull`) | clear error instead of a confusing crash |
 
 ---
 
