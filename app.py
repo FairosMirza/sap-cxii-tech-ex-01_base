@@ -43,7 +43,7 @@ def create_engine(index_dir: Path = INDEX_DIR, method: str = SEARCH_METHOD) -> S
     if method == "ann":
         from similarity.ann import HnswIndex
 
-        engine.ann = HnswIndex(store, engine.weights)
+        engine.ann = HnswIndex(store, engine.weights, index_dir=index_dir)
     log.info("loaded %d products (%s) in %.1fs", len(store), store.meta, time.perf_counter() - start)
     return engine
 

@@ -1,18 +1,20 @@
-# Stage 1: build the feature store from the raw catalogue and the precomputed
-# embeddings (artifacts/embeddings, produced offline by scripts/embed.py).
+# Stage 1: build the feature store and the HNSW index from the raw catalogue and the
+# precomputed embeddings (artifacts/embeddings, produced offline by scripts/embed.py).
 FROM python:3.14-slim AS build
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir "$(grep '^numpy==' requirements.txt)"
+RUN pip install --no-cache-dir $(grep -E '^(numpy|faiss-cpu)==' requirements.txt)
 COPY similarity/ similarity/
 COPY data/archive.zip data/
 COPY artifacts/embeddings/ artifacts/embeddings/
-RUN python -m similarity.build --data data/archive.zip --out /build/index
+RUN python -m similarity.build --data data/archive.zip --out /build/index \
+    && python -m similarity.ann --index-dir /build/index
 
 # Stage 2: the API only. No raw data, no ONNX/scikit-learn, runs as non-root.
 FROM python:3.14-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    OMP_NUM_THREADS=1 \
     INDEX_DIR=/app/index \
     SEARCH_METHOD=ann
 WORKDIR /app

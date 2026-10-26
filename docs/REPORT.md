@@ -36,8 +36,8 @@ Appendix: [Technical details](#appendix-technical-details)
 |---|---|
 | Quality | 73.5% of queries get at least one co-purchased product in the top 10. 96% of results share the query's category and 99% its shopper segment. |
 | Speed | 0.34 ms per query with HNSW, which returns the same top 10 as exact search (recall@10 = 1.000). On 1M vectors: 0.21 ms vs 7.9 ms for brute force. |
-| Robustness | 74 automated tests pass. The service runs on Kubernetes as 2 replicas, and a rolling restart under continuous traffic produced **0 failed requests** out of 2,990. |
-| Deployment | A multi-stage Docker image (458 MB) builds in about 1 minute. It runs as a non-root user on a read-only filesystem. CI builds it, deploys it to Kubernetes and tests it on every push. |
+| Robustness | 75 automated tests pass. The service runs on Kubernetes as 2 replicas. A rolling restart under continuous traffic produced **0 failed requests** out of 2,990, and again with 3 of the node's 4 CPUs saturated. |
+| Deployment | A multi-stage Docker image (644 MB, including the prebuilt index) builds in under 2 minutes and is ready about 2 s after start. It runs as a non-root user on a read-only filesystem. CI builds it, deploys it to Kubernetes and tests it on every push. |
 
 ---
 
@@ -69,8 +69,8 @@ Appendix: [Technical details](#appendix-technical-details)
 
 The pipeline has three phases:
 - **Offline:** heavy work done once per catalogue (downloading images, running neural networks).
-- **Build:** turns the raw data plus embeddings into a compact feature store, inside the Docker build.
-- **Serve:** loads the store, builds the vector index and answers requests.
+- **Build:** turns the raw data plus embeddings into a compact feature store and the HNSW vector index, inside the Docker build.
+- **Serve:** loads the store and the prebuilt index, then answers requests.
 
 ```mermaid
 flowchart TB
@@ -85,11 +85,11 @@ flowchart TB
   end
   subgraph BUILD["2. Build (Docker stage 1, a few seconds)"]
     direction LR
-    FS["similarity.build<br/>clean data, align embeddings,<br/>encode all 10 components"] --> STORE[("feature store<br/>56 MB")]
+    FS["similarity.build + similarity.ann<br/>clean data, align embeddings,<br/>encode 10 components, build HNSW"] --> STORE[("feature store + HNSW index<br/>160 MB")]
   end
   subgraph SERVE["3. Serve (each API pod)"]
     direction LR
-    START["startup: load store,<br/>build HNSW index (1.8 s)"] --> API["FastAPI<br/>GET /find_similar_products"]
+    START["startup: load store and<br/>prebuilt HNSW index (~1 s)"] --> API["FastAPI<br/>GET /find_similar_products"]
   end
   RAW --> FS
   EMB --> FS
@@ -101,10 +101,10 @@ flowchart TB
 | Models | `make models` | Hugging Face (pinned revisions) | `models/` (ONNX) | ~1 min | once |
 | Images | `make images` | image URLs | `data/images/` (235 MB) | ~5 min | once per catalogue |
 | Embeddings | `make embeddings` | names, images | `artifacts/embeddings/` (44 MB) | ~8 min on CPU | once per catalogue |
-| Feature store | `make index`, or Docker stage 1 | zip + embeddings | `artifacts/index/` | 2–4 s | every build |
-| Serve | `make serve`, or the container | feature store | in-memory HNSW index + API | ready in ~6 s | per pod |
-| Test | `make test` | code + feature store | 74 tests | ~10 s | every change |
-| Deploy | `make kind-deploy` | image | 2 replicas | ~20 s rollout | per release |
+| Feature store + index | `make index`, or Docker stage 1 | zip + embeddings | `artifacts/index/` | ~5 s each | every build |
+| Serve | `make serve`, or the container | feature store + index | API with the index in memory | ready in ~2 s | per pod |
+| Test | `make test` | code + feature store | 75 tests | ~10 s | every change |
+| Deploy | `make kind-deploy` | image | 2 replicas | ~10 s rollout | per release |
 | Smoke | `make kind-smoke` | running service | API checks + zero-downtime check | ~65 s | per release |
 
 ### 3.2 Life of a request
@@ -136,7 +136,7 @@ flowchart LR
   P["push / PR"] --> T
   subgraph T["job: test"]
     direction TB
-    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store"] --> T4["pytest: 74 tests"]
+    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store + HNSW"] --> T4["pytest: 75 tests"]
   end
   T --> D
   subgraph D["job: deploy"]
@@ -225,6 +225,7 @@ Result 1 ranks first despite a slightly weaker name match. Its listing also offe
 | Prices encoded as angles | Feature scaling + Euclidean distance | Keeps every component an inner product, so all components fit in one vector index |
 | HNSW + exact re-ranking | Brute force, IVF-PQ, Annoy, ScaNN | Top recall/speed trade-off for in-memory data, incremental inserts, few settings; the exact re-rank keeps all ranking rules in one place |
 | Precomputed embeddings in Git LFS | Compute in the Docker build; artifact store | Reproducible build without 30k image downloads or ML frameworks in the image |
+| HNSW index built at image build time | Build at pod startup | Pods load it in ~1 s instead of spending 14–33 s building it under a 1-CPU limit, which caused restart loops on a busy node ([§9](#9-problems-found-and-fixed)) |
 | Serving image without ML libraries | One image with everything | Smaller attack surface and image; offline and online code are clearly separated |
 | One uvicorn worker per pod | Several workers per pod | Kubernetes scales replicas; each pod stays simple and predictable |
 | Python 3.14 | Python 3.10 (in the sample Dockerfile) | 3.10 reaches end of life in October 2026 |
@@ -296,12 +297,12 @@ The other options are better suited elsewhere:
 
 All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), kind v0.33 with Kubernetes v1.37.
 
-### 8.1 Automated tests: 74 passing (`make test`)
+### 8.1 Automated tests: 75 passing (`make test`)
 
 | Suite | What it proves |
 |---|---|
 | `test_data.py` (38) | Every parsing rule: prices, units, segments, colours, image URLs, zip loading, brand and category inference, the Git LFS pointer guard |
-| `test_engine.py` (15) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact |
+| `test_engine.py` (16) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact, saved index reused only with matching settings |
 | `test_api.py` (17) | 200 / 404 / 422 / 503 / 500 responses, the weights and method parameters, the explanation endpoint |
 | `test_integration.py` (4) | On the real data: the Part 1 function, HNSW recall ≥ 0.98, sensible neighbours, the API serving the real index |
 
@@ -309,9 +310,9 @@ All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), k
 
 | Check | Result |
 |---|---|
-| `docker build .` with the real Dockerfile (packages from PyPI) | Passed in 1 min 12 s; the feature store is built inside the image (3.9 s) |
-| Image contents | 458 MB: Debian slim + Python ≈ 160 MB, Python packages 123 MB, feature store 56 MB, code < 0.1 MB |
-| Run with `--read-only --cap-drop ALL` | Ready in ~6 s, ~270 MiB memory, runs as UID 10001 |
+| `docker build .` with the real Dockerfile (packages from PyPI) | Passed in 1 min 46 s; the feature store (3.3 s) and the HNSW index (4.9 s) are built inside the image |
+| Image contents | 644 MB: Debian slim + Python ≈ 160 MB, Python packages 123 MB, feature store + HNSW index 160 MB, code < 0.1 MB |
+| Run with `--read-only --cap-drop ALL` | Ready 1.7 s after start (index loaded in 0.7 s), ~270 MiB memory, runs as UID 10001 |
 | Endpoints | 200 for a known product; 404 unknown product; 422 for `num_similar=0`, `num_similar=1000` and bad weights |
 | Clone without Git LFS | The build stops with a clear message to run `git lfs install && git lfs pull` |
 | Fresh clone from GitHub | Without LFS the build stops at the guard as intended; after `git lfs install && git lfs pull` the clone builds and returns the same results |
@@ -321,11 +322,12 @@ All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), k
 | Check | Result |
 |---|---|
 | Manifest schema validation (strict, Kubernetes 1.37) | Passed for the Deployment and the Service |
-| `kubectl apply` + rollout of 2 replicas | Both ready in 20 s |
+| `kubectl apply` + rollout of 2 replicas | Rollout in 9 s; each pod Ready 2–4 s after start, 0 restarts |
 | Requests through the Service | Correct ids; 404 / 422 as expected; `/ready` reports 30,000 products and both embedding models |
 | Inside a pod | `uid=10001`, writing to `/app` fails (read-only filesystem), `/tmp` is writable, scikit-learn is absent |
 | **Zero downtime:** continuous requests during `kubectl rollout restart` | Without `preStop`: 12 of 2,575 requests failed. With a 5 s `preStop` sleep: **0 of 2,990** failed (p50 1.4 ms, p99 19 ms) |
 | `make kind-smoke`, the repeatable version used in CI | Functional checks OK; 2,453 / 2,453 requests succeeded during the rollout |
+| **Stress:** the same test with a pod burning 3 of the node's 4 CPUs | 2,594 / 2,594 requests succeeded; new pods loaded the index in 0.7–1.2 s, 0 restarts |
 
 ### 8.4 Continuous integration
 
@@ -335,7 +337,7 @@ The first run, on the commit that published the repo, passed:
 
 | Job | Duration | Result |
 |---|---|---|
-| Tests (unit, API, integration) | 1 min 1 s | 73 passed in 14 s (the LFS-guard test was added after this run) |
+| Tests (unit, API, integration) | 1 min 1 s | 73 passed in 14 s (tests added later run in later CI runs) |
 | Docker image + Kubernetes (kind) | 3 min 6 s | image built; container smoke test OK; rolled out on kind; functional checks OK; **2,600 / 2,600** requests succeeded during the rolling restart (p50 1.9 ms, p99 16 ms) |
 
 ---
@@ -350,6 +352,7 @@ The first run, on the commit that published the repo, passed:
 | Some image links are dead | download run | try the product's other images | images for 99.6% |
 | FAISS and scikit-learn each bundle their own OpenMP library | inspecting loaded libraries | scikit-learn kept out of the API | one OpenMP runtime in production |
 | Rolling restarts dropped 0.47% of requests | in-cluster load test | `preStop` sleep of 5 s | 0 failed requests |
+| Pods restarted in a loop (19 restarts) after the laptop had been asleep and busy | `kubectl get pods`, events: startup probe timeouts, exit 137 | each pod was building the HNSW index at startup (14–33 s under a 1-CPU limit, with OpenMP using 4 threads); the index is now built once in the Docker build and loaded at startup, `OMP_NUM_THREADS=1`, probe timeouts of 3 s and a 120 s startup budget | startup 14–33 s → ~1 s; 0 restarts and 0 failed requests in a rollout with 3 of 4 CPUs saturated |
 | A tie-break test passed for the wrong reason (ids happened to sort the same way) | test review | test data where id order and rating order disagree | the test now proves the rating tie-break |
 | A clone without Git LFS gives placeholder files | review of the LFS change, then a fresh clone from GitHub | the build detects them and explains the fix (`git lfs install && git lfs pull`) | clear error instead of a confusing crash |
 
@@ -360,7 +363,7 @@ The first run, on the commit that published the repo, passed:
 - **No ground-truth labels.** Weights were set by hand and checked with proxies. With click or purchase data, the next step is to learn the weights and validate with A/B tests.
 - **Generic image model.** ResNet-50 (ImageNet) sees shape and colour but not style. CLIP or a fashion-tuned model should improve results and would allow text-to-image search.
 - **Static catalogue.** Updates mean a rebuild and a rolling deploy. For frequent updates, use HNSW's incremental inserts or a vector database (e.g. SAP HANA Cloud Vector Engine, pgvector).
-- **Scale.** The index is rebuilt at startup (1.8 s for 30k products). For millions of products, persist the index and use compressed vectors (HNSW-SQ or IVF-PQ).
+- **Scale.** The HNSW index is built at image build time (4.9 s for 30k products) and memory-loaded at startup. For millions of products, use compressed vectors (HNSW-SQ or IVF-PQ) and memory-map the index.
 - **Production hardening.** Add authentication, TLS and rate limiting at the ingress, an HPA and a PodDisruptionBudget, and metrics and tracing.
 - **Variety.** 45% of results share the query's brand. That suits "more like this"; a discovery use case would lower the brand weight, which the `weights` parameter already supports.
 
@@ -402,7 +405,8 @@ $$x_c = \big[\sqrt{w_k}\, v_k(c)\big]_k, \qquad y_q = \Big[\tfrac{w'_k}{\sqrt{w_
 
 - **Same score as exact search:** the index ranks by exactly the exact scorer's score, and per-request weights work without rebuilding the index.
 - **Random codes for one-hot components:** brand and category are one-hot in the exact scorer (6.3k + 250 dimensions). In the index they become random 64-d unit codes, whose inner product is about 0 (standard deviation 0.125) for different values. That noise only affects which candidates are fetched, because the exact scorer re-scores them.
-- **Index settings:** HNSW with `M=32`, `efConstruction=200` and `efSearch=100`, using inner product. 30k products × 798 dimensions are built in 1.8 s at startup (91 MB of vectors).
+- **Index settings:** HNSW with `M=32`, `efConstruction=200` and `efSearch=100`, using inner product. 30k products × 798 dimensions (91 MB of vectors).
+- **Lifecycle:** `python -m similarity.ann` builds the index once in the Docker build stage and saves it with its build settings. At startup a pod loads it (~1 s) if the settings match the current weights, and rebuilds it otherwise, so a stale index is never used silently.
 
 ### A.3 Full benchmark (`make benchmark`)
 

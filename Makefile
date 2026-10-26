@@ -17,8 +17,9 @@ images:  ## product images into data/images/ (cached)
 embeddings:  ## text + image embeddings into artifacts/embeddings/
 	$(PY) -m scripts.embed
 
-index:  ## feature store served by the API into artifacts/index/
+index:  ## feature store + HNSW index served by the API into artifacts/index/
 	$(PY) -m similarity.build
+	$(PY) -m similarity.ann
 
 serve: index
 	.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000

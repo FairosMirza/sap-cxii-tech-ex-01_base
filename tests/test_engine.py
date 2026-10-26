@@ -74,6 +74,18 @@ def test_ann_matches_exact_search(store):
             assert engine.find_similar(pid, 3, weights, "ann") == engine.find_similar(pid, 3, weights, "exact")
 
 
+def test_saved_hnsw_index_is_reused_only_with_matching_settings(store, tmp_path):
+    weights = SimilarityEngine(store).weights
+    HnswIndex(store, weights).save(tmp_path)
+    loaded = HnswIndex(store, weights, index_dir=tmp_path)
+    assert loaded.index.ntotal == len(store)
+    assert loaded.search(0, weights, 3).tolist() == HnswIndex(store, weights).search(0, weights, 3).tolist()
+
+    other = {**weights, "brand": 0.5}  # stale index: different weights -> rebuilt, not reused
+    rebuilt = HnswIndex(store, other, index_dir=tmp_path)
+    assert rebuilt.params["weights"] == {k: v for k, v in other.items() if v > 0}
+
+
 def test_store_round_trip(store, tmp_path):
     store.save(tmp_path)
     loaded = SimilarityEngine(FeatureStore.load(tmp_path))

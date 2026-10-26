@@ -42,23 +42,26 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
-          # The index loads before uvicorn opens the port; give it time, then probe readiness.
+          # The index loads before uvicorn opens the port; probes tolerate a busy node.
           startupProbe:
             httpGet:
               path: /ready
               port: http
             periodSeconds: 2
-            failureThreshold: 30
+            timeoutSeconds: 3
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /ready
               port: http
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /health
               port: http
             periodSeconds: 20
+            timeoutSeconds: 3
           # Keep serving while the endpoint is removed from the Service; avoids dropped requests on rollouts.
           lifecycle:
             preStop:

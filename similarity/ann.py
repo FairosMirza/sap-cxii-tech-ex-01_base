@@ -15,24 +15,34 @@ arXiv:1702.08734; Douze et al., 2024, arXiv:2401.08281).
 
 from __future__ import annotations
 
+import argparse
+import json
+import logging
+import time
 from collections.abc import Mapping
+from pathlib import Path
 
 import numpy as np
 
-from .features import NUMERIC, FeatureStore
+from .features import DEFAULT_INDEX_DIR, NUMERIC, FeatureStore
 
 _DENSE = ("text", "image", "segment", "color")
 _CODED = ("category", "brand")
+INDEX_FILE, PARAMS_FILE = "hnsw.faiss", "hnsw.json"
+log = logging.getLogger(__name__)
 
 
 class HnswIndex:
     def __init__(self, store: FeatureStore, weights: Mapping[str, float], m: int = 32,
-                 ef_construction: int = 200, ef_search: int = 100, code_dim: int = 64, seed: int = 0):
+                 ef_construction: int = 200, ef_search: int = 100, code_dim: int = 64, seed: int = 0,
+                 index_dir: Path | None = None):
         import faiss
 
         self.store = store
         self.ef_search = ef_search
         self.base = {name: w for name, w in weights.items() if w > 0}
+        self.params = {"weights": self.base, "m": m, "ef_construction": ef_construction, "code_dim": code_dim,
+                       "seed": seed, "products": len(store)}
         rng = np.random.default_rng(seed)
         self.codebooks = {}
         for name in _CODED:
@@ -41,11 +51,30 @@ class HnswIndex:
             codes[-1] = 0  # code -1 (unknown) -> zero vector -> neutral
             self.codebooks[name] = codes
 
-        vectors = np.hstack([np.sqrt(w) * block for w, block in self._blocks(slice(None))])
-        self.index = faiss.IndexHNSWFlat(vectors.shape[1], m, faiss.METRIC_INNER_PRODUCT)
-        self.index.hnsw.efConstruction = ef_construction
-        self.index.add(np.ascontiguousarray(vectors, dtype=np.float32))
+        self.index = self._load(index_dir) if index_dir else None
+        if self.index is None:
+            vectors = np.hstack([np.sqrt(w) * block for w, block in self._blocks(slice(None))])
+            self.index = faiss.IndexHNSWFlat(vectors.shape[1], m, faiss.METRIC_INNER_PRODUCT)
+            self.index.hnsw.efConstruction = ef_construction
+            self.index.add(np.ascontiguousarray(vectors, dtype=np.float32))
         faiss.omp_set_num_threads(1)  # single queries: OpenMP only adds overhead
+
+    def _load(self, directory: Path):
+        import faiss
+
+        params = directory / PARAMS_FILE
+        if not (directory / INDEX_FILE).exists():
+            return None
+        if not params.exists() or json.loads(params.read_text()) != self.params:
+            log.warning("saved HNSW index in %s was built with other settings; rebuilding", directory)
+            return None
+        return faiss.read_index(str(directory / INDEX_FILE))
+
+    def save(self, directory: Path) -> None:
+        import faiss
+
+        faiss.write_index(self.index, str(directory / INDEX_FILE))
+        (directory / PARAMS_FILE).write_text(json.dumps(self.params))
 
     def _blocks(self, rows):
         s = self.store
@@ -69,3 +98,22 @@ class HnswIndex:
         params = faiss.SearchParametersHNSW(efSearch=max(self.ef_search, n))
         _, rows = self.index.search(self.query_vector(q, query_weights), n, params=params)
         return rows[0][rows[0] >= 0]
+
+
+def main() -> None:
+    """Build the HNSW index once, next to the feature store, so API pods only load it."""
+    from .engine import DEFAULT_WEIGHTS, validate_weights
+
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument("--index-dir", type=Path, default=DEFAULT_INDEX_DIR)
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    start = time.perf_counter()
+    index = HnswIndex(FeatureStore.load(args.index_dir), validate_weights(DEFAULT_WEIGHTS))
+    index.save(args.index_dir)
+    log.info("HNSW index (%d x %d) -> %s (%.1fs)", index.index.ntotal, index.index.d, args.index_dir,
+             time.perf_counter() - start)
+
+
+if __name__ == "__main__":
+    main()

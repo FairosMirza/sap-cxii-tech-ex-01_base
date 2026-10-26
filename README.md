@@ -18,7 +18,7 @@ Results:
 
 - **Quality:** 73.5% of queries get at least one co-purchased product in the top 10 (name text alone: 69.0%). 96% of results share the query's category and 99% its shopper segment.
 - **Speed:** HNSW with exact re-ranking matches exact search (recall@10 = 1.000) at 0.34 ms vs 1.13 ms per query. On 1M synthetic vectors it takes 0.21 ms vs 7.9 ms for brute force.
-- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 6 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests. 74 tests pass, and CI builds, deploys and tests everything on every push.
+- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 2 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests, even with 3 of 4 node CPUs saturated. 75 tests pass, and CI builds, deploys and tests everything on every push.
 
 ## Quick start
 
@@ -93,8 +93,8 @@ Configuration through environment variables: `INDEX_DIR`, `SEARCH_METHOD` (`ann`
 flowchart LR
   A["data/archive.zip"] --> B["parse + clean"]
   B --> C["MiniLM + ResNet-50<br/>ONNX, offline"]
-  C --> D["feature store<br/>Docker build stage"]
-  D --> E["HNSW index<br/>API startup"]
+  C --> D["feature store + HNSW index<br/>Docker build stage"]
+  D --> E["API pod<br/>loads both at startup"]
   E --> F["GET /find_similar_products"]
 ```
 
@@ -118,7 +118,7 @@ similarity/
   data.py               streaming loader + cleaning
   features.py           component vectors, missing-value handling, feature store
   engine.py             exact scoring, ranking, find_similar_products (Part 1)
-  ann.py                HNSW candidate generation (Part 3)
+  ann.py                HNSW candidate generation (Part 3), built at image build time
   build.py              builds the feature store (Docker build stage)
   text.py, images.py    offline embeddings (ONNX Runtime)
 scripts/                download_models, download_images, embed, compare_text_models, evaluate, benchmark,
