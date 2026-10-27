@@ -216,6 +216,8 @@ Result 1 ranks first despite a slightly weaker name match because it scores on c
 
 ## 6. Design decisions
 
+The [decision summary](DECISION.md) compares each choice with the simplest alternative and lists what it costs.
+
 | Decision | Alternatives considered | Why |
 |---|---|---|
 | Weighted per-component similarity | One big embedding; a learned model | Explainable (each component's contribution can be shown), every weight can be tuned, and no training labels are needed |
@@ -313,7 +315,7 @@ Local checks were run between 2026-10-23 and 2026-10-27 on macOS arm64, with Doc
 
 | Check | Result |
 |---|---|
-| `docker build .` with the real Dockerfile (packages from PyPI) | Passed in 1 min 46 s with a cold dependency cache on a fast connection; an independent no-cache rebuild with slow PyPI downloads took 6 min 20 s. The feature store and HNSW index (about 5 s each) are built inside the image |
+| `docker build .` with the real Dockerfile (packages from PyPI) | Passed in 1 min 46 s with a cold dependency cache on a fast connection; a separate no-cache rebuild with slow PyPI downloads took 6 min 20 s. The feature store and HNSW index (about 5 s each) are built inside the image |
 | Image contents | 644 MB on disk, about 200 MB compressed (what a registry stores): Debian slim + Python ≈ 160 MB, Python packages 123 MB, feature store + HNSW index 160 MB, code < 0.1 MB |
 | Run with `--read-only --cap-drop ALL` | Ready about 2 s after start (index loaded in 0.5–0.7 s), 270 MiB memory, runs as UID 10001 |
 | Part 1 function inside the image | `find_similar_products` returns the same 5 IDs as the HTTP API (also checked in CI) |
@@ -332,7 +334,7 @@ Local checks were run between 2026-10-23 and 2026-10-27 on macOS arm64, with Doc
 | **Zero downtime:** continuous requests during `kubectl rollout restart` | Without `preStop`: 12 of 2,575 requests failed. With a 5 s `preStop` sleep: **0 of 2,990** failed (p50 1.4 ms, p99 19 ms) |
 | `make kind-smoke`, the repeatable version used in CI | Functional checks OK; 2,453 / 2,453 requests succeeded during the rollout |
 | **Stress:** the same test with a pod burning 3 of the node's 4 CPUs | 2,594 / 2,594 requests succeeded; new pods loaded the index in 0.7–1.2 s, 0 restarts |
-| Re-check after the audit fixes (2026-10-27) | 2,708 / 2,708 requests succeeded during the rollout; pods loaded the index in 0.8–0.9 s, 0 restarts; the Part 1 function returns 5 IDs inside a running pod |
+| Re-check after the code-review fixes (2026-10-27) | 2,708 / 2,708 requests succeeded during the rollout; pods loaded the index in 0.8–0.9 s, 0 restarts; the Part 1 function returns 5 IDs inside a running pod |
 
 ### 8.4 Continuous integration
 
@@ -358,11 +360,10 @@ The first run, on the commit that published the repo ([logs](https://github.com/
 | FAISS and scikit-learn each bundle their own OpenMP library | inspecting loaded libraries | scikit-learn kept out of the API | one OpenMP runtime in production |
 | Rolling restarts dropped 0.47% of requests | in-cluster load test | `preStop` sleep of 5 s | 0 failed requests |
 | Pods restarted in a loop (19 restarts) after the laptop had been asleep and busy | `kubectl get pods`, events: startup probe timeouts, exit 137 | each pod was building the HNSW index at startup (14–33 s under a 1-CPU limit, with OpenMP using 4 threads); the index is now built once in the Docker build and loaded at startup, `OMP_NUM_THREADS=1`, probe timeouts of 3 s and a 120 s startup budget | startup 14–33 s → ~1 s; 0 restarts and 0 failed requests in a rollout with 3 of 4 CPUs saturated |
-| The Part 1 function ignored `INDEX_DIR`, so it failed when called inside the Docker image (the HTTP API was fine) | independent code audit | one `index_dir()` setting used by the API, the function and the build; CI calls the function inside the image | works locally, in the image and in a pod |
-| A saved HNSW index was reused for different data of the same size | independent code audit | the feature store carries a content fingerprint, and the index is rebuilt when it doesn't match | regression test with reordered data |
-| HNSW could return fewer than `num_similar` results when many listings share the query's ASIN (synthetic case; the real data has at most 3 per ASIN) | independent code audit | fall back to exact search when the candidates run out | regression test |
-| Several report claims were broader than the evidence (metric denominators, "same top 10", colour source, missing brand/category, image size) | independent code audit | wording corrected; the benchmark now prints 4 decimals and the number of differing lists | claims match the measurements |
-| Two products sharing an image URL could make two download workers write the same temporary file; one then failed with `FileNotFoundError`, stopping the optional image rebuild | independent code audit | each download attempt writes its own temporary file, then atomically replaces the destination | regression test forces the collision; serving and the committed embeddings were never affected |
+| The Part 1 function ignored `INDEX_DIR`, so it failed when called inside the Docker image (the HTTP API was fine) | code review | one `index_dir()` setting used by the API, the function and the build; CI calls the function inside the image | works locally, in the image and in a pod |
+| A saved HNSW index was reused for different data of the same size | code review | the feature store carries a content fingerprint, and the index is rebuilt when it doesn't match | regression test with reordered data |
+| HNSW could return fewer than `num_similar` results when many listings share the query's ASIN (synthetic case; the real data has at most 3 per ASIN) | code review | fall back to exact search when the candidates run out | regression test |
+| Two products sharing an image URL could make two download workers write the same temporary file; one then failed with `FileNotFoundError`, stopping the optional image rebuild | code review | each download attempt writes its own temporary file, then atomically replaces the destination | regression test forces the collision; serving and the committed embeddings were never affected |
 | A tie-break test passed for the wrong reason (ids happened to sort the same way) | test review | test data where id order and rating order disagree | the test now proves the rating tie-break |
 | A clone without Git LFS gives placeholder files | review of the LFS change, then a fresh clone from GitHub | the build detects them and explains the fix (`git lfs install && git lfs pull`) | clear error instead of a confusing crash |
 

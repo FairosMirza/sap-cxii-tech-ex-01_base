@@ -5,7 +5,7 @@
 Given a product's `uniq_id`, return the most similar products in the 30k-product Amazon fashion catalogue.
 All parts of the [assignment](ASSIGNMENT.md) are implemented, including the optional and bonus parts.
 
-**Reviewers: start with the [solution report](docs/REPORT.md).** It has the requirements checklist, pipeline workflow, design decisions, results and verification evidence.
+**Reviewers: start with the [solution report](docs/REPORT.md).** It has the requirements checklist, pipeline workflow, design decisions, results and verification evidence. The short [decision summary](docs/DECISION.md) explains why each choice goes beyond the simplest approach, and what it costs.
 
 | Part | What | Where |
 |---|---|---|
@@ -129,6 +129,7 @@ tests/                  pytest suite
 k8s/                    Deployment + Service
 artifacts/embeddings/   precomputed MiniLM + ResNet-50 embeddings (Git LFS)
 docs/REPORT.md          solution report for reviewers
+docs/DECISION.md        why each design choice goes beyond the simplest approach
 .github/workflows/      CI: tests -> Docker build -> kind deploy -> zero-downtime smoke test
 ```
 
