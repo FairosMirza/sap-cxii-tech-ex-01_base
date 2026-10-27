@@ -36,7 +36,7 @@ Appendix: [Technical details](#appendix-technical-details)
 |---|---|
 | Quality | Of the 1,266 sampled queries that have co-purchase data, 73.5% get at least one co-purchased product in the top 10. 96% of results share the query's category and 99% its shopper segment. These are proxies, not measured relevance. |
 | Speed | 0.33 ms per query with HNSW vs 1.42 ms for exact search (single-threaded). HNSW finds 99.96% of exact search's top-10 results; 4 of 1,000 lists differ. On 1M synthetic vectors: 0.21 ms vs 7.9 ms for brute force. |
-| Robustness | 78 automated tests pass. The service runs on Kubernetes as 2 replicas. A rolling restart under continuous traffic produced **0 failed requests** out of 2,990, and again with 3 of the node's 4 CPUs saturated. |
+| Robustness | 80 automated tests pass. The service runs on Kubernetes as 2 replicas. A rolling restart under continuous traffic produced **0 failed requests** out of 2,990, and again with 3 of the node's 4 CPUs saturated. |
 | Deployment | A multi-stage Docker image (644 MB on disk, about 200 MB compressed, including the prebuilt index) builds in 2–6 minutes depending on network speed and is ready about 2 s after start. It runs as a non-root user on a read-only filesystem. CI builds it, deploys it to Kubernetes and tests it on every push to main and every pull request. |
 
 ---
@@ -103,7 +103,7 @@ flowchart TB
 | Embeddings | `make embeddings` | names, images | `artifacts/embeddings/` (44 MB) | ~8 min on CPU | once per catalogue |
 | Feature store + index | `make index`, or Docker stage 1 | zip + embeddings | `artifacts/index/` | ~5 s each | every build |
 | Serve | `make serve`, or the container | feature store + index | API with the index in memory | ready in ~2 s | per pod |
-| Test | `make test` | code + feature store | 78 tests | ~10 s | every change |
+| Test | `make test` | code + feature store | 80 tests | ~10 s | every change |
 | Deploy | `make kind-deploy` | image | 2 replicas | ~10 s rollout | per release |
 | Smoke | `make kind-smoke` | running service | API checks + zero-downtime check | ~65 s | per release |
 
@@ -136,7 +136,7 @@ flowchart LR
   P["push / PR"] --> T
   subgraph T["job: test"]
     direction TB
-    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store + HNSW"] --> T4["pytest: 78 tests"]
+    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store + HNSW"] --> T4["pytest: 80 tests"]
   end
   T --> D
   subgraph D["job: deploy"]
@@ -158,7 +158,7 @@ Exploring the data turned up several problems. Each is handled in [similarity/da
 | list price ("price") | not in the data, but `discount_percentage` is | `sales_price / (1 − discount)` | 90.4% |
 | `rating` | 25% are 5.0, often based on a single review | used as a weak signal; the review count breaks ties | 100% |
 | `brand` | missing for 27%; case variants (`BIBA`/`Biba`); placeholders ("generic") | normalised; inferred from the start of the name if that brand appears on ≥ 2 products | 76.5% |
-| colour | the `colour` field lists the colours of *other variants* | own colour from the URL slug (`…_Sea-Green_X-Large`), name or specs, 70% of products; if these disagree, every colour found is kept. Where none is found, the listing's variant colours are used as a weaker fallback (another 10%). 15 colour families | 79.3% |
+| colour | the `colour` field lists the colours of *other variants* | own colour from the URL slug (`…_Sea-Green_X-Large`), name or specs, 70% of products; if these disagree, every colour found is kept. Where none is found, the listing's variant colours are used instead (another 10%). They are weaker evidence about this listing's own colour, but they get the same colour weight: no confidence discount is applied. 15 colour families | 79.3% |
 | category | missing for 15% | filled from the most common category of the product's browse node (95.8% agreement) | 99.6% |
 | segment | not a field | from the category prefix (`Womens…`) or the name (women/men/girls/boys/kids/baby/unisex) | 98.8% |
 | images | some links are dead (404) | falls back to the product's 2nd and 3rd image | 99.6% |
@@ -177,7 +177,7 @@ Exploring the data turned up several problems. Each is handled in [similarity/da
 | category | most specific category | same = 1 | 0.15 |
 | brand | normalised brand | same = 1 | 0.10 |
 | segment | women / men / girls / boys / kids / baby / unisex | same 1, related 0.5 | 0.05 |
-| colour | colour families (own colour, else the variant list) | overlap | 0.05 |
+| colour | colour families (own colour, else the variant list at the same weight) | overlap | 0.05 |
 | sales_price | log price | 1 if equal, ≈ 0.81 at 2× apart, −1 at the extremes | 0.08 |
 | price (list) | log list price | same scale | 0.02 |
 | weight | log grams | same scale | 0.02 |
@@ -299,7 +299,7 @@ The other options are better suited elsewhere:
 
 Local checks were run between 2026-10-23 and 2026-10-27 on macOS arm64, with Docker via Colima (4 CPUs, 6 GB) and kind v0.33 (Kubernetes v1.37). CI runs are linked in [§8.4](#84-continuous-integration).
 
-### 8.1 Automated tests: 78 passing (`make test`)
+### 8.1 Automated tests: 80 passing (`make test`)
 
 | Suite | What it proves |
 |---|---|
@@ -307,6 +307,7 @@ Local checks were run between 2026-10-23 and 2026-10-27 on macOS arm64, with Doc
 | `test_engine.py` (19) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact on a small catalogue, saved index reused only with matching settings and data, result count kept when duplicate listings exhaust the HNSW candidates, Part 1 function honours `INDEX_DIR` |
 | `test_api.py` (17) | 200 / 404 / 422 / 503 / 500 responses, the weights and method parameters, the explanation endpoint |
 | `test_integration.py` (4) | On the real data: the Part 1 function, HNSW recall ≥ 0.98, sensible neighbours, the API serving the real index |
+| `test_images.py` (2) | Two workers downloading the same image URL at once both succeed; a failed write leaves no temporary file |
 
 ### 8.2 Docker
 
@@ -361,6 +362,7 @@ The first run, on the commit that published the repo ([logs](https://github.com/
 | A saved HNSW index was reused for different data of the same size | independent code audit | the feature store carries a content fingerprint, and the index is rebuilt when it doesn't match | regression test with reordered data |
 | HNSW could return fewer than `num_similar` results when many listings share the query's ASIN (synthetic case; the real data has at most 3 per ASIN) | independent code audit | fall back to exact search when the candidates run out | regression test |
 | Several report claims were broader than the evidence (metric denominators, "same top 10", colour source, missing brand/category, image size) | independent code audit | wording corrected; the benchmark now prints 4 decimals and the number of differing lists | claims match the measurements |
+| Two products sharing an image URL could make two download workers write the same temporary file; one then failed with `FileNotFoundError`, stopping the optional image rebuild | independent code audit | each download attempt writes its own temporary file, then atomically replaces the destination | regression test forces the collision; serving and the committed embeddings were never affected |
 | A tie-break test passed for the wrong reason (ids happened to sort the same way) | test review | test data where id order and rating order disagree | the test now proves the rating tie-break |
 | A clone without Git LFS gives placeholder files | review of the LFS change, then a fresh clone from GitHub | the build detects them and explains the fix (`git lfs install && git lfs pull`) | clear error instead of a confusing crash |
 

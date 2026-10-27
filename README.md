@@ -18,7 +18,7 @@ Results:
 
 - **Quality:** of the 1,266 sampled queries that have co-purchase data, 73.5% get at least one co-purchased product in the top 10 (name text alone: 69.0%). 96% of results share the query's category and 99% its shopper segment. These are proxies, not measured relevance.
 - **Speed:** HNSW with exact re-ranking finds 99.96% of exact search's top-10 results (4 of 1,000 lists differ) at 0.33 ms vs 1.42 ms per query, single-threaded. On 1M synthetic vectors it takes 0.21 ms vs 7.9 ms for brute force.
-- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 2 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests, even with 3 of 4 node CPUs saturated. 78 tests pass, and CI builds, deploys and tests everything on every push to main and every pull request.
+- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 2 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests, even with 3 of 4 node CPUs saturated. 80 tests pass, and CI builds, deploys and tests everything on every push to main and every pull request.
 
 ## Quick start
 

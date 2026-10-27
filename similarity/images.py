@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import tempfile
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -29,14 +30,28 @@ def image_path(image_dir: Path, url: str) -> Path:
     return image_dir / f"{hashlib.sha1(url.encode()).hexdigest()[:20]}.jpg"
 
 
+def _write_atomically(dest: Path, data: bytes) -> None:
+    """Write to a temp file unique to this attempt, then rename it over ``dest``.
+
+    Products can share an image URL, so two workers may write the same ``dest`` at once;
+    a shared temp name would let one worker rename the other's file away.
+    """
+    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f"{dest.name}.", suffix=".part")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp, dest)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def _download_one(client: httpx.Client, url: str, dest: Path, retries: int = 4) -> bool:
     for attempt in range(retries):
         try:
             response = client.get(url)
             if response.status_code == 200 and response.headers.get("content-type", "").startswith("image/"):
-                tmp = dest.with_suffix(".part")
-                tmp.write_bytes(response.content)
-                tmp.replace(dest)  # atomic, so an interrupted run never leaves a half-written file
+                _write_atomically(dest, response.content)
                 return True
             if response.status_code not in _RETRY_STATUS:
                 return False
