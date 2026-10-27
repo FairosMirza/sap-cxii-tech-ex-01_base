@@ -39,6 +39,7 @@ def test_unknown_product_is_404(client):
     {"product_id": "kurta-blue", "num_similar": 3, "weights": "text:abc"},
     {"product_id": "kurta-blue", "num_similar": 3, "weights": "colour:1"},
     {"product_id": "kurta-blue", "num_similar": 3, "weights": "text:-1"},
+    {"product_id": "kurta-blue", "num_similar": 3, "weights": "text:1e308,image:1e308"},
     {"product_id": "kurta-blue", "num_similar": 3, "method": "magic"},
 ])
 def test_invalid_requests_are_422(client, params):

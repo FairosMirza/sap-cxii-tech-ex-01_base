@@ -3,9 +3,10 @@
 score(q, c) = sum_k w_k * s_k(q, c) / sum_k w_k   over components k known for q
 
 s_k is the per-component similarity from ``features.py``. Components the query lacks
-are dropped and the weights renormalised; candidates lacking a component score the
-neutral expected value. Ties (equal scores after rounding to 6 decimals) are broken by
-rating, review count, lower price and finally uniq_id, so results are deterministic.
+are dropped and the weights renormalised; candidates lacking a component get its mean
+vector, except that an unknown brand or category scores 0. Ties (equal scores after
+rounding to 6 decimals) are broken by rating, review count, lower price and finally
+uniq_id, so results are deterministic.
 """
 
 from __future__ import annotations
@@ -53,7 +54,10 @@ def validate_weights(weights: Mapping[str, float]) -> dict[str, float]:
         raise ValueError(f"unknown components {sorted(unknown)}; expected a subset of {list(COMPONENTS)}")
     if any(not np.isfinite(v) or v < 0 for v in weights.values()):
         raise ValueError("weights must be finite and non-negative")
-    if sum(weights.values()) <= 0:
+    total = sum(weights.values())
+    if not np.isfinite(total):
+        raise ValueError("the weights must have a finite sum")
+    if total <= 0:
         raise ValueError("at least one weight must be positive")
     return {name: float(weights.get(name, 0.0)) for name in COMPONENTS}
 
@@ -64,7 +68,7 @@ class SimilarityEngine:
         self.store = store
         self.weights = validate_weights(weights or DEFAULT_WEIGHTS)
         self.ann = ann
-        self.ann_candidates = ann_candidates  # HNSW hits re-scored exactly per query
+        self.ann_candidates = ann_candidates  # minimum HNSW hits re-scored exactly per query
         self._row = {pid: i for i, pid in enumerate(store.ids.tolist())}
         self._cached = lru_cache(maxsize=cache_size)(self._search)
 
@@ -130,10 +134,14 @@ class SimilarityEngine:
 
     # ------------------------------------------------------------------ ranking
 
+    def candidate_count(self, k: int) -> int:
+        """HNSW hits re-scored exactly for a top-``k`` query."""
+        return max(self.ann_candidates, 4 * k)
+
     def _search(self, q: int, k: int, weights_key, method: str) -> tuple[np.ndarray, np.ndarray]:
         weights = dict(weights_key) if weights_key else self.weights
         if method == "ann" and self.ann is not None:
-            candidates = self.ann.search(q, self.query_weights(q, weights), max(self.ann_candidates, 4 * k))
+            candidates = self.ann.search(q, self.query_weights(q, weights), self.candidate_count(k))
             rows, scores = self._rank(q, candidates, self.scores(q, weights, candidates), k)
             if len(rows) == k:
                 return rows, scores

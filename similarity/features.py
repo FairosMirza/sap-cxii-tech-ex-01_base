@@ -10,9 +10,10 @@ component vectors, so the overall score is a weighted sum of inner products
   category, brand integer codes (one-hot)                        -> 1 if equal else 0
   numeric         angle encoding theta = pi * t, t in [0, 1]     -> cos(pi * |t_a - t_b|)
 
-Missing values: a candidate with an unknown component gets the component's mean
-vector, so it scores the *expected* similarity (neutral) instead of being punished
-or rewarded. A query with an unknown component drops it and renormalises the weights.
+Missing values: a candidate with an unknown dense or numeric component gets the
+component's mean observed vector (an imputation assumption, not a guarantee of
+unbiased ranking); an unknown category or brand never matches. A query with an
+unknown component drops it and renormalises the weights.
 """
 
 from __future__ import annotations

@@ -47,12 +47,12 @@ def real_catalogue(index_dir: Path, n_queries: int) -> None:
     queries = [str(i) for i in np.random.default_rng(1).choice(store.ids, n_queries, replace=False)]
     exact, ms = timed(lambda pid: set(engine.search(pid, 10, method="exact")[0].tolist()), queries)
     print(f"exact brute force            recall@10 1.0000  {percentiles(ms)}")
-    for n in (20, 50, 100, 200, 400):
+    for n in (40, 50, 100, 200, 400):
         engine.ann_candidates, engine.ann.ef_search = n, n
         approx, ms = timed(lambda pid: set(engine.search(pid, 10, method="ann")[0].tolist()), queries)
         recall = np.mean([len(a & e) / max(len(e), 1) for a, e in zip(approx, exact)])
         differ = sum(a != e for a, e in zip(approx, exact))
-        print(f"hnsw, {n:3d} candidates re-ranked recall@10 {recall:.4f}  {percentiles(ms)}  "
+        print(f"hnsw, {engine.candidate_count(10):3d} candidates re-ranked recall@10 {recall:.4f}  {percentiles(ms)}  "
               f"lists differing {differ}/{len(queries)}")
 
 

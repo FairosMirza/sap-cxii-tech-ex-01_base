@@ -26,7 +26,7 @@ Appendix: [Technical details](#appendix-technical-details)
 **Approach.**
 - Each product is described by **10 components**: name text, image, category, brand, shopper segment, colour, sale price, list price, weight and rating.
 - The similarity of two products is a **weighted average** of their per-component similarities.
-- Missing data is handled explicitly ([§5.3](#53-missing-data-the-fallback-mechanism)), so incomplete products are not systematically favoured or penalised.
+- Missing data is handled explicitly ([§5.3](#53-missing-data-the-fallback-mechanism)). The fallback uses average observed component vectors; this is an imputation assumption, not a guarantee of unbiased ranking. An unknown brand or category never matches.
 - Text and image embeddings are computed **offline** with ONNX Runtime: MiniLM for names, ResNet-50 for images.
 - The API serves precomputed vectors. An **HNSW index** finds candidates and an exact scorer ranks them.
 
@@ -36,7 +36,7 @@ Appendix: [Technical details](#appendix-technical-details)
 |---|---|
 | Quality | Of the 1,266 sampled queries that have co-purchase data, 73.5% get at least one co-purchased product in the top 10. 96% of results share the query's category and 99% its shopper segment. These are proxies, not measured relevance. |
 | Speed | 0.33 ms per query with HNSW vs 1.42 ms for exact search (single-threaded). HNSW finds 99.96% of exact search's top-10 results; 4 of 1,000 lists differ. On 1M synthetic vectors: 0.21 ms vs 7.9 ms for brute force. |
-| Robustness | 80 automated tests pass. The service runs on Kubernetes as 2 replicas. A rolling restart under continuous traffic produced **0 failed requests** out of 2,990, and again with 3 of the node's 4 CPUs saturated. |
+| Robustness | 82 automated tests pass. The service runs on Kubernetes as 2 replicas. A rolling restart under continuous traffic produced **0 failed requests** out of 2,990, and again with 3 of the node's 4 CPUs saturated. |
 | Deployment | A multi-stage Docker image (644 MB on disk, about 200 MB compressed, including the prebuilt index) builds in 2–6 minutes depending on network speed and is ready about 2 s after start. It runs as a non-root user on a read-only filesystem. CI builds it, deploys it to Kubernetes and tests it on every push to main and every pull request. |
 
 ---
@@ -103,7 +103,7 @@ flowchart TB
 | Embeddings | `make embeddings` | names, images | `artifacts/embeddings/` (44 MB) | ~8 min on CPU | once per catalogue |
 | Feature store + index | `make index`, or Docker stage 1 | zip + embeddings | `artifacts/index/` | ~5 s each | every build |
 | Serve | `make serve`, or the container | feature store + index | API with the index in memory | ready in ~2 s | per pod |
-| Test | `make test` | code + feature store | 80 tests | ~10 s | every change |
+| Test | `make test` | code + feature store | 82 tests | ~10 s | every change |
 | Deploy | `make kind-deploy` | image | 2 replicas | ~10 s rollout | per release |
 | Smoke | `make kind-smoke` | running service | API checks + zero-downtime check | ~65 s | per release |
 
@@ -136,7 +136,7 @@ flowchart LR
   P["push / PR"] --> T
   subgraph T["job: test"]
     direction TB
-    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store + HNSW"] --> T4["pytest: 80 tests"]
+    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store + HNSW"] --> T4["pytest: 82 tests"]
   end
   T --> D
   subgraph D["job: deploy"]
@@ -155,7 +155,7 @@ Exploring the data turned up several problems. Each is handled in [similarity/da
 |---|---|---|---|
 | `weight` | 79% of rows hold the placeholder `999999999`; units are mixed (g, Grams, Kilograms, Kg) | placeholder → unknown; converted to grams | 20.8% |
 | `sales_price` | string in INR; missing for 10% | parsed to a number | 90.4% |
-| list price ("price") | not in the data, but `discount_percentage` is | `sales_price / (1 − discount)` | 90.4% |
+| list price ("price") | not in the data, but `discount_percentage` is | `sales_price / (1 − discount)`; with no valid discount, list price = sale price (46% of priced products), so the two price components partly overlap | 90.4% |
 | `rating` | 25% are 5.0, often based on a single review | used as a weak signal; the review count breaks ties | 100% |
 | `brand` | missing for 27%; case variants (`BIBA`/`Biba`); placeholders ("generic") | normalised; inferred from the start of the name if that brand appears on ≥ 2 products | 76.5% |
 | colour | the `colour` field lists the colours of *other variants* | own colour from the URL slug (`…_Sea-Green_X-Large`), name or specs, 70% of products; if these disagree, every colour found is kept. Where none is found, the listing's variant colours are used instead (another 10%). They are weaker evidence about this listing's own colour, but they get the same colour weight: no confidence discount is applied. 15 colour families | 79.3% |
@@ -202,7 +202,7 @@ Result 1 ranks first despite a slightly weaker name match because it scores on c
 ### 5.3 Missing data (the fallback mechanism)
 
 - **The query lacks a component.** The component is dropped and the remaining weights are rescaled. For example, a product without a photo is matched on text and attributes only.
-- **A candidate lacks a component.** For text, image, colour, segment and the numeric components it gets the component's *average* vector, so it scores the *expected* similarity on that component. An unknown brand or category never matches (scores 0). Random products share a brand only 0.2% of the time and a category 4.7%, so this costs at most about 0.007 of the score.
+- **A candidate lacks a component.** For text, image, colour, segment and the numeric components it gets the component's *average observed* vector, so on that component it scores the query's average similarity to the products where the value is known. This is an imputation assumption (a missing value is treated as typical), not a guarantee of unbiased ranking. An unknown brand or category never matches (scores 0). Against an otherwise equal candidate that does match, it loses the whole component weight: 0.10 for brand or 0.15 for category under the default weights, and more when the query's weights are rescaled or set per request. Brand is unknown for 23.5% of products, category for 0.4%.
 - **A whole embedding file is missing.** The build falls back to TF-IDF + LSA for text and turns the image component off.
 
 ### 5.4 Ranking rules
@@ -301,13 +301,13 @@ The other options are better suited elsewhere:
 
 Local checks were run between 2026-10-23 and 2026-10-27 on macOS arm64, with Docker via Colima (4 CPUs, 6 GB) and kind v0.33 (Kubernetes v1.37). CI runs are linked in [§8.4](#84-continuous-integration).
 
-### 8.1 Automated tests: 80 passing (`make test`)
+### 8.1 Automated tests: 82 passing (`make test`)
 
 | Suite | What it proves |
 |---|---|
 | `test_data.py` (38) | Every parsing rule: prices, units, segments, colours, image URLs, zip loading, brand and category inference, the Git LFS pointer guard |
-| `test_engine.py` (19) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact on a small catalogue, saved index reused only with matching settings and data, result count kept when duplicate listings exhaust the HNSW candidates, Part 1 function honours `INDEX_DIR` |
-| `test_api.py` (17) | 200 / 404 / 422 / 503 / 500 responses, the weights and method parameters, the explanation endpoint |
+| `test_engine.py` (20) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact on a small catalogue, saved index reused only with matching settings and data, result count kept when duplicate listings exhaust the HNSW candidates, Part 1 function honours `INDEX_DIR` |
+| `test_api.py` (18) | 200 / 404 / 422 / 503 / 500 responses, the weights and method parameters, the explanation endpoint |
 | `test_integration.py` (4) | On the real data: the Part 1 function, HNSW recall ≥ 0.98, sensible neighbours, the API serving the real index |
 | `test_images.py` (2) | Two workers downloading the same image URL at once both succeed; a failed write leaves no temporary file |
 
@@ -364,6 +364,7 @@ The first run, on the commit that published the repo ([logs](https://github.com/
 | A saved HNSW index was reused for different data of the same size | code review | the feature store carries a content fingerprint, and the index is rebuilt when it doesn't match | regression test with reordered data |
 | HNSW could return fewer than `num_similar` results when many listings share the query's ASIN (synthetic case; the real data has at most 3 per ASIN) | code review | fall back to exact search when the candidates run out | regression test |
 | Two products sharing an image URL could make two download workers write the same temporary file; one then failed with `FileNotFoundError`, stopping the optional image rebuild | code review | each download attempt writes its own temporary file, then atomically replaces the destination | regression test forces the collision; serving and the committed embeddings were never affected |
+| Custom weights that were each finite but summed to infinity (e.g. `text:1e308,image:1e308`) were accepted, and normalising them gave all-zero weights | code review | a non-finite total is rejected with 422 | engine and API tests |
 | A tie-break test passed for the wrong reason (ids happened to sort the same way) | test review | test data where id order and rating order disagree | the test now proves the rating tie-break |
 | A clone without Git LFS gives placeholder files | review of the LFS change, then a fresh clone from GitHub | the build detects them and explains the fix (`git lfs install && git lfs pull`) | clear error instead of a confusing crash |
 
@@ -406,7 +407,7 @@ The first run, on the commit that published the repo ([logs](https://github.com/
   - Because each comparison is an inner product, numbers fit in the same vector index as the embeddings.
 - **Segment:** each segment is a row of a positive semi-definite similarity matrix (1 = same, 0.5 = related, 0 = unrelated), factorised with an eigendecomposition. The inner product of two rows reproduces the matrix entry.
 - **Colour:** an L2-normalised multi-hot vector over 15 colour families. Its inner product is the Ochiai overlap of the two colour sets.
-- **Missing values:** a candidate with an unknown dense or numeric component gets the component's mean vector, so its score is the expected similarity. Unknown brand and category codes never match (score 0); the expected match rate for random products is only 0.2% and 4.7%. A query with an unknown component drops it, and the other weights are rescaled.
+- **Missing values:** a candidate with an unknown dense or numeric component gets the component's mean observed vector, an imputation assumption ([§5.3](#53-missing-data-the-fallback-mechanism)). Unknown brand and category codes never match (score 0). A query with an unknown component drops it, and the other weights are rescaled.
 
 ### A.2 One vector for the index
 
@@ -426,11 +427,13 @@ Real catalogue, 1,000 single queries, single-threaded (as in the container), mea
 | Method | recall@10 vs exact | top-10 lists differing | p50 | p95 |
 |---|---|---|---|---|
 | exact brute force (numpy) | 1.0000 | 0 | 1.42 ms | 1.71 ms |
-| HNSW, 20 candidates re-ranked | 0.9975 | 23 | 0.21 ms | 0.34 ms |
+| HNSW, 40 candidates re-ranked | 0.9975 | 23 | 0.21 ms | 0.34 ms |
 | HNSW, 50 candidates | 0.9986 | 14 | 0.22 ms | 0.29 ms |
 | **HNSW, 100 candidates (default)** | **0.9996** | **4** | **0.33 ms** | 0.44 ms |
 | HNSW, 200 candidates | 0.9997 | 3 | 0.54 ms | 0.69 ms |
 | HNSW, 400 candidates | 0.9999 | 1 | 0.94 ms | 1.22 ms |
+
+The engine re-ranks at least 4 × k HNSW hits, so for top-10 the smallest pool is 40; `make benchmark` prints the effective count.
 
 Scale-up: synthetic 128-d vectors sampled around the real product vectors, single-thread search:
 

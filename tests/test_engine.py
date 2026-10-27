@@ -53,7 +53,8 @@ def test_explanation_adds_up_to_the_score(engine):
     np.testing.assert_allclose([sum(p.values()) for p in parts], scores, atol=1e-3)
 
 
-@pytest.mark.parametrize("weights", [{"colour": 1}, {"text": -1}, {"text": 0, "image": 0}, {"text": float("nan")}])
+@pytest.mark.parametrize("weights", [{"colour": 1}, {"text": -1}, {"text": 0, "image": 0}, {"text": float("nan")},
+                                     {"text": 1e308, "image": 1e308}])
 def test_invalid_weights_are_rejected(weights):
     with pytest.raises(ValueError):
         validate_weights(weights)
