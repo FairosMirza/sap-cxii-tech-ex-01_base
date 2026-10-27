@@ -137,3 +137,7 @@ docs/DECISION.md        why each design choice goes beyond the simplest approach
 ## References
 
 See the [report](docs/REPORT.md#11-references): HNSW, FAISS, ANN-Benchmarks, product quantisation, ScaNN, MiniLM, Sentence-BERT, ResNet and LSA.
+
+## Development process
+
+I used AI coding assistants to support implementation, test creation, debugging and documentation. I set the scope and constraints, made the final design decisions, and reviewed the results to decide what to retain, revise or reject. This included decisions on data cleaning, similarity scoring, missing-data handling, model selection and deployment. [DECISION.md](docs/DECISION.md) records the reasoning, evidence and known limitations behind these choices.
