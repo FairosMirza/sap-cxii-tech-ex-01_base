@@ -16,9 +16,9 @@ All parts of the [assignment](ASSIGNMENT.md) are implemented, including the opti
 
 Results:
 
-- **Quality:** 73.5% of queries get at least one co-purchased product in the top 10 (name text alone: 69.0%). 96% of results share the query's category and 99% its shopper segment.
-- **Speed:** HNSW with exact re-ranking matches exact search (recall@10 = 1.000) at 0.34 ms vs 1.13 ms per query. On 1M synthetic vectors it takes 0.21 ms vs 7.9 ms for brute force.
-- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 2 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests, even with 3 of 4 node CPUs saturated. 75 tests pass, and CI builds, deploys and tests everything on every push.
+- **Quality:** of the 1,266 sampled queries that have co-purchase data, 73.5% get at least one co-purchased product in the top 10 (name text alone: 69.0%). 96% of results share the query's category and 99% its shopper segment. These are proxies, not measured relevance.
+- **Speed:** HNSW with exact re-ranking finds 99.96% of exact search's top-10 results (4 of 1,000 lists differ) at 0.33 ms vs 1.42 ms per query, single-threaded. On 1M synthetic vectors it takes 0.21 ms vs 7.9 ms for brute force.
+- **Deployment:** the container runs as non-root on a read-only filesystem, is ready in about 2 s and uses about 270 MiB. On Kubernetes, a rolling restart under continuous traffic produced 0 failed requests, even with 3 of 4 node CPUs saturated. 78 tests pass, and CI builds, deploys and tests everything on every push to main and every pull request.
 
 ## Quick start
 
@@ -74,6 +74,8 @@ make compare evaluate benchmark   # reproduce the tables in the report
 | `GET /health` | Liveness |
 | `GET /ready` | Readiness (index loaded) plus index metadata |
 
+Results contain at most one listing per product (ASIN) and never the query itself. If fewer than `num_similar` other products exist, all of them are returned.
+
 Optional parameters on both search endpoints:
 - `weights=text:0.5,image:0.3,brand:0.2` overrides the weights for one request. Components you leave out get weight 0.
 - `method=exact|ann` picks brute force or HNSW. The default comes from `SEARCH_METHOD`, which is `ann` in the image.
@@ -85,7 +87,7 @@ Optional parameters on both search endpoints:
 | 503 | Index not loaded |
 | 500 | Unexpected error: logged server-side, the response body is generic (no stack trace) |
 
-Configuration through environment variables: `INDEX_DIR`, `SEARCH_METHOD` (`ann` or `exact`), `MAX_NUM_SIMILAR` (default 100).
+Configuration through environment variables: `INDEX_DIR` (artifact location, used by both the API and `find_similar_products`), `SEARCH_METHOD` (`ann` or `exact`), `MAX_NUM_SIMILAR` (default 100).
 
 ## How it works
 

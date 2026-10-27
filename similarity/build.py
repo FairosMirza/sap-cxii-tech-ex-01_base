@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from .data import load_products
-from .features import DEFAULT_INDEX_DIR as INDEX_DIR, build_store
+from .features import build_store, index_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 EMBEDDINGS = ROOT / "artifacts" / "embeddings"
@@ -39,7 +39,8 @@ def load_aligned(path: Path, ids: list[str]) -> tuple[np.ndarray, np.ndarray] | 
     return vectors, known
 
 
-def build(data_path: Path | None = None, out_dir: Path = INDEX_DIR, embeddings: Path = EMBEDDINGS) -> None:
+def build(data_path: Path | None = None, out_dir: Path | None = None, embeddings: Path = EMBEDDINGS) -> None:
+    out_dir = out_dir or index_dir()
     start = time.perf_counter()
     products = load_products(data_path)
     ids = [p.uniq_id for p in products]
@@ -68,7 +69,7 @@ def build(data_path: Path | None = None, out_dir: Path = INDEX_DIR, embeddings: 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=None)
-    parser.add_argument("--out", type=Path, default=INDEX_DIR)
+    parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     build(args.data, args.out)

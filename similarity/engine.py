@@ -15,7 +15,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from .features import COMPONENTS, DEFAULT_INDEX_DIR, NUMERIC, FeatureStore
+from .features import COMPONENTS, NUMERIC, FeatureStore, index_dir
 
 DEFAULT_WEIGHTS: dict[str, float] = {
     "text": 0.30,
@@ -39,7 +39,7 @@ class ProductNotFoundError(KeyError):
 
 @lru_cache(maxsize=1)
 def default_engine() -> SimilarityEngine:
-    return SimilarityEngine(FeatureStore.load(DEFAULT_INDEX_DIR))
+    return SimilarityEngine(FeatureStore.load(index_dir()))
 
 
 def find_similar_products(product_id: str, num_similar: int) -> list[str]:
@@ -134,7 +134,10 @@ class SimilarityEngine:
         weights = dict(weights_key) if weights_key else self.weights
         if method == "ann" and self.ann is not None:
             candidates = self.ann.search(q, self.query_weights(q, weights), max(self.ann_candidates, 4 * k))
-            return self._rank(q, candidates, self.scores(q, weights, candidates), k)
+            rows, scores = self._rank(q, candidates, self.scores(q, weights, candidates), k)
+            if len(rows) == k:
+                return rows, scores
+            # too few distinct products among the candidates (e.g. many listings of one ASIN): use exact search
         return self._rank(q, np.arange(len(self.store)), self.scores(q, weights), k)
 
     def _rank(self, q: int, rows: np.ndarray, scores: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:

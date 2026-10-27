@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import DEFAULT_INDEX_DIR, NUMERIC, FeatureStore
+from .features import NUMERIC, FeatureStore, index_dir
 
 _DENSE = ("text", "image", "segment", "color")
 _CODED = ("category", "brand")
@@ -42,7 +42,7 @@ class HnswIndex:
         self.ef_search = ef_search
         self.base = {name: w for name, w in weights.items() if w > 0}
         self.params = {"weights": self.base, "m": m, "ef_construction": ef_construction, "code_dim": code_dim,
-                       "seed": seed, "products": len(store)}
+                       "seed": seed, "products": len(store), "data": store.meta.get("fingerprint")}
         rng = np.random.default_rng(seed)
         self.codebooks = {}
         for name in _CODED:
@@ -105,7 +105,7 @@ def main() -> None:
     from .engine import DEFAULT_WEIGHTS, validate_weights
 
     parser = argparse.ArgumentParser(description=main.__doc__)
-    parser.add_argument("--index-dir", type=Path, default=DEFAULT_INDEX_DIR)
+    parser.add_argument("--index-dir", type=Path, default=index_dir())
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     start = time.perf_counter()

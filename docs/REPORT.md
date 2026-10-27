@@ -26,7 +26,7 @@ Appendix: [Technical details](#appendix-technical-details)
 **Approach.**
 - Each product is described by **10 components**: name text, image, category, brand, shopper segment, colour, sale price, list price, weight and rating.
 - The similarity of two products is a **weighted average** of their per-component similarities.
-- Missing data is handled explicitly, so incomplete products are neither favoured nor penalised.
+- Missing data is handled explicitly ([§5.3](#53-missing-data-the-fallback-mechanism)), so incomplete products are not systematically favoured or penalised.
 - Text and image embeddings are computed **offline** with ONNX Runtime: MiniLM for names, ResNet-50 for images.
 - The API serves precomputed vectors. An **HNSW index** finds candidates and an exact scorer ranks them.
 
@@ -34,10 +34,10 @@ Appendix: [Technical details](#appendix-technical-details)
 
 | | |
 |---|---|
-| Quality | 73.5% of queries get at least one co-purchased product in the top 10. 96% of results share the query's category and 99% its shopper segment. |
-| Speed | 0.34 ms per query with HNSW, which returns the same top 10 as exact search (recall@10 = 1.000). On 1M vectors: 0.21 ms vs 7.9 ms for brute force. |
-| Robustness | 75 automated tests pass. The service runs on Kubernetes as 2 replicas. A rolling restart under continuous traffic produced **0 failed requests** out of 2,990, and again with 3 of the node's 4 CPUs saturated. |
-| Deployment | A multi-stage Docker image (644 MB, including the prebuilt index) builds in under 2 minutes and is ready about 2 s after start. It runs as a non-root user on a read-only filesystem. CI builds it, deploys it to Kubernetes and tests it on every push. |
+| Quality | Of the 1,266 sampled queries that have co-purchase data, 73.5% get at least one co-purchased product in the top 10. 96% of results share the query's category and 99% its shopper segment. These are proxies, not measured relevance. |
+| Speed | 0.33 ms per query with HNSW vs 1.42 ms for exact search (single-threaded). HNSW finds 99.96% of exact search's top-10 results; 4 of 1,000 lists differ. On 1M synthetic vectors: 0.21 ms vs 7.9 ms for brute force. |
+| Robustness | 78 automated tests pass. The service runs on Kubernetes as 2 replicas. A rolling restart under continuous traffic produced **0 failed requests** out of 2,990, and again with 3 of the node's 4 CPUs saturated. |
+| Deployment | A multi-stage Docker image (644 MB on disk, about 200 MB compressed, including the prebuilt index) builds in 2–6 minutes depending on network speed and is ready about 2 s after start. It runs as a non-root user on a read-only filesystem. CI builds it, deploys it to Kubernetes and tests it on every push to main and every pull request. |
 
 ---
 
@@ -103,7 +103,7 @@ flowchart TB
 | Embeddings | `make embeddings` | names, images | `artifacts/embeddings/` (44 MB) | ~8 min on CPU | once per catalogue |
 | Feature store + index | `make index`, or Docker stage 1 | zip + embeddings | `artifacts/index/` | ~5 s each | every build |
 | Serve | `make serve`, or the container | feature store + index | API with the index in memory | ready in ~2 s | per pod |
-| Test | `make test` | code + feature store | 75 tests | ~10 s | every change |
+| Test | `make test` | code + feature store | 78 tests | ~10 s | every change |
 | Deploy | `make kind-deploy` | image | 2 replicas | ~10 s rollout | per release |
 | Smoke | `make kind-smoke` | running service | API checks + zero-downtime check | ~65 s | per release |
 
@@ -129,19 +129,19 @@ sequenceDiagram
 
 ### 3.3 CI/CD workflow (GitHub Actions)
 
-The workflow is [.github/workflows/ci.yml](../.github/workflows/ci.yml). It runs on every push and pull request:
+The workflow is [.github/workflows/ci.yml](../.github/workflows/ci.yml). It runs on every push to main and every pull request:
 
 ```mermaid
 flowchart LR
   P["push / PR"] --> T
   subgraph T["job: test"]
     direction TB
-    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store + HNSW"] --> T4["pytest: 75 tests"]
+    T1["checkout + LFS pull (cached)"] --> T2["Python 3.14, pip install"] --> T3["build feature store + HNSW"] --> T4["pytest: 78 tests"]
   end
   T --> D
   subgraph D["job: deploy"]
     direction TB
-    D1["docker build"] --> D2["run container read-only,<br/>no capabilities: smoke test"] --> D3["create kind cluster"] --> D4["kubectl apply, rollout"] --> D5["API checks + rolling restart<br/>under load: 0 errors allowed"]
+    D1["docker build"] --> D2["container smoke test (read-only,<br/>no capabilities) + Part 1 function"] --> D3["create kind cluster"] --> D4["kubectl apply, rollout"] --> D5["API checks + rolling restart<br/>under load: 0 errors allowed"]
   end
 ```
 
@@ -158,7 +158,7 @@ Exploring the data turned up several problems. Each is handled in [similarity/da
 | list price ("price") | not in the data, but `discount_percentage` is | `sales_price / (1 − discount)` | 90.4% |
 | `rating` | 25% are 5.0, often based on a single review | used as a weak signal; the review count breaks ties | 100% |
 | `brand` | missing for 27%; case variants (`BIBA`/`Biba`); placeholders ("generic") | normalised; inferred from the start of the name if that brand appears on ≥ 2 products | 76.5% |
-| colour | the `colour` field lists the colours of *other variants* | own colour taken from the URL slug (`…_Sea-Green_X-Large`) or the name; 15 colour families | 79.3% |
+| colour | the `colour` field lists the colours of *other variants* | own colour from the URL slug (`…_Sea-Green_X-Large`), name or specs, 70% of products; if these disagree, every colour found is kept. Where none is found, the listing's variant colours are used as a weaker fallback (another 10%). 15 colour families | 79.3% |
 | category | missing for 15% | filled from the most common category of the product's browse node (95.8% agreement) | 99.6% |
 | segment | not a field | from the category prefix (`Womens…`) or the name (women/men/girls/boys/kids/baby/unisex) | 98.8% |
 | images | some links are dead (404) | falls back to the product's 2nd and 3rd image | 99.6% |
@@ -177,7 +177,7 @@ Exploring the data turned up several problems. Each is handled in [similarity/da
 | category | most specific category | same = 1 | 0.15 |
 | brand | normalised brand | same = 1 | 0.10 |
 | segment | women / men / girls / boys / kids / baby / unisex | same 1, related 0.5 | 0.05 |
-| colour | colour families | overlap | 0.05 |
+| colour | colour families (own colour, else the variant list) | overlap | 0.05 |
 | sales_price | log price | 1 if equal, ≈ 0.81 at 2× apart, −1 at the extremes | 0.08 |
 | price (list) | log list price | same scale | 0.02 |
 | weight | log grams | same scale | 0.02 |
@@ -197,12 +197,12 @@ Query: **"Brown Faux Leather Jacket for Man"** (Leather Retail, ₹1,669). This 
 | 2 | Leather Retail Black Plain Faux Leather Jacket for Man (₹1,599) | 0.811 | 0.262 | 0.116 | 0.153 | 0.102 | 0.051 | 0.000 | 0.097 | 0.030 |
 | 3 | Leather Retail Army Colour Faux Leather Jacket for Man (₹1,699) | 0.795 | 0.248 | 0.113 | 0.153 | 0.102 | 0.051 | 0.000 | 0.097 | 0.030 |
 
-Result 1 ranks first despite a slightly weaker name match. Its listing also offers brown, so it scores on colour, which the other two do not.
+Result 1 ranks first despite a slightly weaker name match because it scores on colour. Its data is contradictory: the URL names a brown variant while the title says black, and both colours are kept. Results 2 and 3 are black and army green, so they get no colour credit.
 
 ### 5.3 Missing data (the fallback mechanism)
 
 - **The query lacks a component.** The component is dropped and the remaining weights are rescaled. For example, a product without a photo is matched on text and attributes only.
-- **A candidate lacks a component.** It gets the component's *average* vector, so it scores the *expected* similarity. Missing data neither helps nor hurts it.
+- **A candidate lacks a component.** For text, image, colour, segment and the numeric components it gets the component's *average* vector, so it scores the *expected* similarity on that component. An unknown brand or category never matches (scores 0). Random products share a brand only 0.2% of the time and a category 4.7%, so this costs at most about 0.007 of the score.
 - **A whole embedding file is missing.** The build falls back to TF-IDF + LSA for text and turns the image component off.
 
 ### 5.4 Ranking rules
@@ -247,7 +247,7 @@ Setup: 3,000 random products. Trivial neighbours (same product, same ASIN, ident
 ### 7.2 Does each component help?
 
 Setup: 2,000 random queries, top 10. There are no relevance labels, so these are proxies:
-- **co-purchase hit@10:** share of queries where at least one result appears in the product's "customers also bought" list. This list is never used as a feature, so the metric doesn't reuse a scoring input.
+- **co-purchase hit@10:** among the 1,266 queries whose "customers also bought" list matches catalogue products, the share with at least one of them in the top 10. The other 734 queries have no usable list; they are left out, not counted as misses. The list is never used as a feature, so the metric doesn't reuse a scoring input.
 - **brand@10:** share of results from the same brand. Lower means more variety.
 
 | Weights | co-purchase hit@10 | category@10 | segment@10 | brand@10 |
@@ -265,12 +265,14 @@ Setup: 2,000 random queries, top 10. There are no relevance labels, so these are
 
 ### 7.3 Search speed (Part 3)
 
-**Real catalogue** (30k products, single queries):
+**Real catalogue** (30k products, 1,000 single queries, single-threaded as in the container):
 
-| Method | recall@10 vs exact | p50 latency |
-|---|---|---|
-| exact (brute force) | 1.000 | 1.13 ms |
-| **HNSW, 100 candidates re-ranked (default)** | **1.000** | **0.34 ms** |
+| Method | recall@10 vs exact | top-10 lists differing | p50 latency |
+|---|---|---|---|
+| exact (brute force) | 1.0000 | 0 | 1.42 ms |
+| **HNSW, 100 candidates re-ranked (default)** | **0.9996** | **4 of 1,000** | **0.33 ms** |
+
+HNSW is approximate. The exact re-rank orders the candidates HNSW fetched, but it can't recover a product HNSW missed. `method=exact` gives exhaustive results.
 
 **Scale test** (synthetic 128-d vectors around the real ones, single thread):
 
@@ -295,14 +297,14 @@ The other options are better suited elsewhere:
 
 ## 8. Verification: tests, Docker, Kubernetes, CI
 
-All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), kind v0.33 with Kubernetes v1.37.
+Local checks were run between 2026-10-23 and 2026-10-27 on macOS arm64, with Docker via Colima (4 CPUs, 6 GB) and kind v0.33 (Kubernetes v1.37). CI runs are linked in [§8.4](#84-continuous-integration).
 
-### 8.1 Automated tests: 75 passing (`make test`)
+### 8.1 Automated tests: 78 passing (`make test`)
 
 | Suite | What it proves |
 |---|---|
 | `test_data.py` (38) | Every parsing rule: prices, units, segments, colours, image URLs, zip loading, brand and category inference, the Git LFS pointer guard |
-| `test_engine.py` (16) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact, saved index reused only with matching settings |
+| `test_engine.py` (19) | Exclusion and deduplication, ranking, weights, fallbacks, tie-breaking, explanations, caching, save/load, HNSW = exact on a small catalogue, saved index reused only with matching settings and data, result count kept when duplicate listings exhaust the HNSW candidates, Part 1 function honours `INDEX_DIR` |
 | `test_api.py` (17) | 200 / 404 / 422 / 503 / 500 responses, the weights and method parameters, the explanation endpoint |
 | `test_integration.py` (4) | On the real data: the Part 1 function, HNSW recall ≥ 0.98, sensible neighbours, the API serving the real index |
 
@@ -310,9 +312,10 @@ All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), k
 
 | Check | Result |
 |---|---|
-| `docker build .` with the real Dockerfile (packages from PyPI) | Passed in 1 min 46 s; the feature store (3.3 s) and the HNSW index (4.9 s) are built inside the image |
-| Image contents | 644 MB: Debian slim + Python ≈ 160 MB, Python packages 123 MB, feature store + HNSW index 160 MB, code < 0.1 MB |
-| Run with `--read-only --cap-drop ALL` | Ready 1.7 s after start (index loaded in 0.7 s), ~270 MiB memory, runs as UID 10001 |
+| `docker build .` with the real Dockerfile (packages from PyPI) | Passed in 1 min 46 s with a cold dependency cache on a fast connection; an independent no-cache rebuild with slow PyPI downloads took 6 min 20 s. The feature store and HNSW index (about 5 s each) are built inside the image |
+| Image contents | 644 MB on disk, about 200 MB compressed (what a registry stores): Debian slim + Python ≈ 160 MB, Python packages 123 MB, feature store + HNSW index 160 MB, code < 0.1 MB |
+| Run with `--read-only --cap-drop ALL` | Ready about 2 s after start (index loaded in 0.5–0.7 s), 270 MiB memory, runs as UID 10001 |
+| Part 1 function inside the image | `find_similar_products` returns the same 5 IDs as the HTTP API (also checked in CI) |
 | Endpoints | 200 for a known product; 404 unknown product; 422 for `num_similar=0`, `num_similar=1000` and bad weights |
 | Clone without Git LFS | The build stops with a clear message to run `git lfs install && git lfs pull` |
 | Fresh clone from GitHub | Without LFS the build stops at the guard as intended; after `git lfs install && git lfs pull` the clone builds and returns the same results |
@@ -328,12 +331,13 @@ All checks were run on 2026-10-23: macOS arm64, Docker Desktop (4 CPUs, 6 GB), k
 | **Zero downtime:** continuous requests during `kubectl rollout restart` | Without `preStop`: 12 of 2,575 requests failed. With a 5 s `preStop` sleep: **0 of 2,990** failed (p50 1.4 ms, p99 19 ms) |
 | `make kind-smoke`, the repeatable version used in CI | Functional checks OK; 2,453 / 2,453 requests succeeded during the rollout |
 | **Stress:** the same test with a pod burning 3 of the node's 4 CPUs | 2,594 / 2,594 requests succeeded; new pods loaded the index in 0.7–1.2 s, 0 restarts |
+| Re-check after the audit fixes (2026-10-27) | 2,708 / 2,708 requests succeeded during the rollout; pods loaded the index in 0.8–0.9 s, 0 restarts; the Part 1 function returns 5 IDs inside a running pod |
 
 ### 8.4 Continuous integration
 
-Every push runs the [workflow](../.github/workflows/ci.yml) shown in [§3.3](#33-cicd-workflow-github-actions). The status badge is in the [README](../README.md).
+Every push to main and every pull request runs the [workflow](../.github/workflows/ci.yml) shown in [§3.3](#33-cicd-workflow-github-actions). All runs and their full logs: [GitHub Actions](https://github.com/FairosMirza/sap-cxii-tech-ex-01_base/actions/workflows/ci.yml). The status badge is in the [README](../README.md).
 
-The first run, on the commit that published the repo, passed:
+The first run, on the commit that published the repo ([logs](https://github.com/FairosMirza/sap-cxii-tech-ex-01_base/actions/runs/40338592980)), passed:
 
 | Job | Duration | Result |
 |---|---|---|
@@ -353,6 +357,10 @@ The first run, on the commit that published the repo, passed:
 | FAISS and scikit-learn each bundle their own OpenMP library | inspecting loaded libraries | scikit-learn kept out of the API | one OpenMP runtime in production |
 | Rolling restarts dropped 0.47% of requests | in-cluster load test | `preStop` sleep of 5 s | 0 failed requests |
 | Pods restarted in a loop (19 restarts) after the laptop had been asleep and busy | `kubectl get pods`, events: startup probe timeouts, exit 137 | each pod was building the HNSW index at startup (14–33 s under a 1-CPU limit, with OpenMP using 4 threads); the index is now built once in the Docker build and loaded at startup, `OMP_NUM_THREADS=1`, probe timeouts of 3 s and a 120 s startup budget | startup 14–33 s → ~1 s; 0 restarts and 0 failed requests in a rollout with 3 of 4 CPUs saturated |
+| The Part 1 function ignored `INDEX_DIR`, so it failed when called inside the Docker image (the HTTP API was fine) | independent code audit | one `index_dir()` setting used by the API, the function and the build; CI calls the function inside the image | works locally, in the image and in a pod |
+| A saved HNSW index was reused for different data of the same size | independent code audit | the feature store carries a content fingerprint, and the index is rebuilt when it doesn't match | regression test with reordered data |
+| HNSW could return fewer than `num_similar` results when many listings share the query's ASIN (synthetic case; the real data has at most 3 per ASIN) | independent code audit | fall back to exact search when the candidates run out | regression test |
+| Several report claims were broader than the evidence (metric denominators, "same top 10", colour source, missing brand/category, image size) | independent code audit | wording corrected; the benchmark now prints 4 decimals and the number of differing lists | claims match the measurements |
 | A tie-break test passed for the wrong reason (ids happened to sort the same way) | test review | test data where id order and rating order disagree | the test now proves the rating tie-break |
 | A clone without Git LFS gives placeholder files | review of the LFS change, then a fresh clone from GitHub | the build detects them and explains the fix (`git lfs install && git lfs pull`) | clear error instead of a confusing crash |
 
@@ -395,7 +403,7 @@ The first run, on the commit that published the repo, passed:
   - Because each comparison is an inner product, numbers fit in the same vector index as the embeddings.
 - **Segment:** each segment is a row of a positive semi-definite similarity matrix (1 = same, 0.5 = related, 0 = unrelated), factorised with an eigendecomposition. The inner product of two rows reproduces the matrix entry.
 - **Colour:** an L2-normalised multi-hot vector over 15 colour families. Its inner product is the Ochiai overlap of the two colour sets.
-- **Missing values:** a candidate with an unknown component gets the component's mean vector, so its score is the expected similarity. A query with an unknown component drops it, and the other weights are rescaled.
+- **Missing values:** a candidate with an unknown dense or numeric component gets the component's mean vector, so its score is the expected similarity. Unknown brand and category codes never match (score 0); the expected match rate for random products is only 0.2% and 4.7%. A query with an unknown component drops it, and the other weights are rescaled.
 
 ### A.2 One vector for the index
 
@@ -403,22 +411,23 @@ Each product is packed into one vector using the default weights $w$. The query 
 
 $$x_c = \big[\sqrt{w_k}\, v_k(c)\big]_k, \qquad y_q = \Big[\tfrac{w'_k}{\sqrt{w_k}}\, v_k(q)\Big]_k \quad\Rightarrow\quad \langle x_c, y_q\rangle = \sum_k w'_k\, s_k(q, c)$$
 
-- **Same score as exact search:** the index ranks by exactly the exact scorer's score, and per-request weights work without rebuilding the index.
+- **Nearly the same score as exact search:** for text, image, colour, segment and the numeric components the inner product equals the exact score, and per-request weights work without rebuilding the index. Brand and category use random codes (next bullet), so for them the index score is approximate (differences up to about 0.03 in tests).
 - **Random codes for one-hot components:** brand and category are one-hot in the exact scorer (6.3k + 250 dimensions). In the index they become random 64-d unit codes, whose inner product is about 0 (standard deviation 0.125) for different values. That noise only affects which candidates are fetched, because the exact scorer re-scores them.
 - **Index settings:** HNSW with `M=32`, `efConstruction=200` and `efSearch=100`, using inner product. 30k products × 798 dimensions (91 MB of vectors).
-- **Lifecycle:** `python -m similarity.ann` builds the index once in the Docker build stage and saves it with its build settings. At startup a pod loads it (~1 s) if the settings match the current weights, and rebuilds it otherwise, so a stale index is never used silently.
+- **Lifecycle:** `python -m similarity.ann` builds the index once in the Docker build stage and saves it with its build settings. At startup a pod loads it (~1 s) only if its settings and the feature store's content fingerprint both match, and rebuilds it otherwise, so a stale index is never used silently.
 
 ### A.3 Full benchmark (`make benchmark`)
 
-Real catalogue, single queries:
+Real catalogue, 1,000 single queries, single-threaded (as in the container), measured 2026-10-27:
 
-| Method | recall@10 vs exact | p50 | p95 |
-|---|---|---|---|
-| exact brute force (numpy) | 1.000 | 1.13 ms | 1.33 ms |
-| HNSW, 20 candidates re-ranked | 0.998 | 0.20 ms | 0.28 ms |
-| HNSW, 50 candidates | 0.999 | 0.23 ms | 0.35 ms |
-| **HNSW, 100 candidates (default)** | **1.000** | **0.34 ms** | 0.54 ms |
-| HNSW, 200 candidates | 1.000 | 0.56 ms | 0.81 ms |
+| Method | recall@10 vs exact | top-10 lists differing | p50 | p95 |
+|---|---|---|---|---|
+| exact brute force (numpy) | 1.0000 | 0 | 1.42 ms | 1.71 ms |
+| HNSW, 20 candidates re-ranked | 0.9975 | 23 | 0.21 ms | 0.34 ms |
+| HNSW, 50 candidates | 0.9986 | 14 | 0.22 ms | 0.29 ms |
+| **HNSW, 100 candidates (default)** | **0.9996** | **4** | **0.33 ms** | 0.44 ms |
+| HNSW, 200 candidates | 0.9997 | 3 | 0.54 ms | 0.69 ms |
+| HNSW, 400 candidates | 0.9999 | 1 | 0.94 ms | 1.22 ms |
 
 Scale-up: synthetic 128-d vectors sampled around the real product vectors, single-thread search:
 

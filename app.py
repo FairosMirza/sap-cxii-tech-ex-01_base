@@ -19,9 +19,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from similarity.engine import ProductNotFoundError, SimilarityEngine, validate_weights
-from similarity.features import DEFAULT_INDEX_DIR, FeatureStore
+from similarity.features import FeatureStore, index_dir
 
-INDEX_DIR = Path(os.getenv("INDEX_DIR", DEFAULT_INDEX_DIR))
+INDEX_DIR = index_dir()
 SEARCH_METHOD = os.getenv("SEARCH_METHOD", "ann")
 MAX_NUM_SIMILAR = int(os.getenv("MAX_NUM_SIMILAR", "100"))
 

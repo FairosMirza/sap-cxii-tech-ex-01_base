@@ -13,8 +13,16 @@ def make_product(uid, asin=None, name="item", brand=None, price=None, rating=4.0
                    segment=segment, colors=tuple(colors), image_urls=())
 
 
-@pytest.fixture(scope="session")
-def store():
+def build_test_store(rows, meta=None):
+    """rows: (product, text vector, image vector or None)."""
+    products = [p for p, _, _ in rows]
+    text = np.stack([t for _, t, _ in rows])
+    image = np.stack([i if i is not None else np.zeros_like(t) for _, t, i in rows])
+    image_known = np.array([i is not None for _, _, i in rows])
+    return build_store(products, text, image, image_known, meta=meta)
+
+
+def catalogue_rows():
     """A tiny catalogue with known structure: kurtas, men's tops, a dress without image/price, twins."""
     rng = np.random.default_rng(0)
     topics = rng.standard_normal((4, 16))
@@ -26,7 +34,7 @@ def store():
     twin_text, twin_image = vec(3), vec(3)
     women = {"category": "WomensKurtas", "segment": "women"}
     men = {"category": "MensTops", "segment": "men"}
-    rows = [
+    return [
         (make_product("kurta-blue", "A1", "Blue cotton kurta", "biba", 500, colors=["blue"], **women), kurta_text, kurta_image),
         (make_product("kurta-blue-dup", "A1", "Blue cotton kurta", "biba", 500, colors=["blue"], **women), kurta_text, kurta_image),
         (make_product("kurta-blue-set", "B", "Blue kurta set", "biba", 550, 4.5, colors=["blue"], **women), vec(0, 0.15), vec(0, 0.15)),
@@ -37,11 +45,27 @@ def store():
         (make_product("twin-a", "G", "Plain socks", "x", 100, rating=3.0), twin_text, twin_image),
         (make_product("twin-b", "H", "Plain socks", "x", 100, rating=4.5), twin_text, twin_image),
     ]
-    products = [p for p, _, _ in rows]
-    text = np.stack([t for _, t, _ in rows])
-    image = np.stack([i if i is not None else np.zeros(16) for _, _, i in rows])
-    image_known = np.array([i is not None for _, _, i in rows])
-    return build_store(products, text, image, image_known, meta={"source": "test"})
+
+
+@pytest.fixture(scope="session")
+def store():
+    return build_test_store(catalogue_rows(), meta={"source": "test"})
+
+
+@pytest.fixture(scope="session")
+def reordered_store():
+    """Same products and size as ``store``, rows in reverse order."""
+    return build_test_store(catalogue_rows()[::-1], meta={"source": "test"})
+
+
+@pytest.fixture(scope="session")
+def duplicate_heavy_store():
+    """The query's ASIN has 12 identical listings: more than the HNSW candidates fetched below."""
+    rng = np.random.default_rng(1)
+    base = rng.standard_normal(16)
+    rows = [(make_product(f"dup-{i}", "Q", "Same tee"), base, base) for i in range(12)]
+    rows += [(make_product(f"other-{i}", f"O{i}", "Other tee"), base + rng.standard_normal(16), base) for i in range(3)]
+    return build_test_store(rows)
 
 
 @pytest.fixture

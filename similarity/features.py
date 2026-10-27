@@ -17,8 +17,10 @@ or rewarded. A query with an unknown component drops it and renormalises the wei
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,8 +33,13 @@ COMPONENTS = ("text", "image", "category", "brand", "segment", "color", "sales_p
 NUMERIC = ("sales_price", "price", "weight", "rating")
 SEGMENTS = ("women", "men", "unisex", "girls", "boys", "kids", "baby")
 COLORS = tuple(COLOR_FAMILIES)
-DEFAULT_INDEX_DIR = Path(__file__).resolve().parents[1] / "artifacts" / "index"
+_PROJECT_INDEX_DIR = Path(__file__).resolve().parents[1] / "artifacts" / "index"
 _RELATED_SEGMENTS = {("unisex", "women"), ("unisex", "men"), ("kids", "girls"), ("kids", "boys"), ("kids", "baby")}
+
+
+def index_dir() -> Path:
+    """Feature store + HNSW location for the API, find_similar_products and the build: $INDEX_DIR or artifacts/index."""
+    return Path(os.getenv("INDEX_DIR") or _PROJECT_INDEX_DIR)
 
 
 def segment_vectors() -> np.ndarray:
@@ -103,6 +110,13 @@ class FeatureStore:
     def __len__(self) -> int:
         return len(self.ids)
 
+    def fingerprint(self) -> str:
+        """Content hash of the scoring arrays; ties a saved HNSW index to the data it was built from."""
+        digest = hashlib.sha256()
+        for name in self.ARRAYS:
+            digest.update(np.ascontiguousarray(getattr(self, name)).tobytes())
+        return digest.hexdigest()[:16]
+
     def save(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         arrays = {name: getattr(self, name) for name in self.ARRAYS}
@@ -162,7 +176,7 @@ def build_store(
         known[name] = np.array([v is not None for v in values])
         numeric[:, j] = _impute_mean(angle_encode(values, log), known[name])
 
-    return FeatureStore(
+    store = FeatureStore(
         ids=np.array([p.uniq_id for p in products]),
         group=_codes([p.asin for p in products]),
         category=category,
@@ -184,3 +198,5 @@ def build_store(
         ],
         meta=meta or {},
     )
+    store.meta = {**store.meta, "fingerprint": store.fingerprint()}
+    return store

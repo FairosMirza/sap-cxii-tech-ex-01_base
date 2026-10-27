@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from similarity.ann import HnswIndex
-from similarity.engine import ProductNotFoundError, SimilarityEngine, validate_weights
+from similarity.engine import ProductNotFoundError, SimilarityEngine, default_engine, find_similar_products, validate_weights
 from similarity.features import COMPONENTS, FeatureStore
 
 
@@ -86,9 +86,34 @@ def test_saved_hnsw_index_is_reused_only_with_matching_settings(store, tmp_path)
     assert rebuilt.params["weights"] == {k: v for k, v in other.items() if v > 0}
 
 
+def test_saved_hnsw_index_is_rebuilt_for_different_data_of_the_same_size(store, reordered_store, tmp_path):
+    weights = SimilarityEngine(store).weights
+    HnswIndex(store, weights).save(tmp_path)
+    reused = HnswIndex(reordered_store, weights, index_dir=tmp_path)
+    fresh = HnswIndex(reordered_store, weights)
+    for q in range(len(reordered_store)):
+        assert reused.search(q, weights, 3).tolist() == fresh.search(q, weights, 3).tolist()
+
+
+def test_ann_falls_back_to_exact_when_duplicate_listings_exhaust_candidates(duplicate_heavy_store):
+    engine = SimilarityEngine(duplicate_heavy_store, ann_candidates=4)
+    engine.ann = HnswIndex(duplicate_heavy_store, engine.weights)
+    assert len(engine.find_similar("dup-0", 2, method="ann")) == 2  # 8 candidates, all listings of the query
+
+
+def test_part1_function_uses_index_dir(store, tmp_path, monkeypatch):
+    store.save(tmp_path)
+    monkeypatch.setenv("INDEX_DIR", str(tmp_path))
+    default_engine.cache_clear()
+    try:
+        assert find_similar_products("kurta-blue", 1) == ["kurta-blue-set"]
+    finally:
+        default_engine.cache_clear()
+
+
 def test_store_round_trip(store, tmp_path):
     store.save(tmp_path)
     loaded = SimilarityEngine(FeatureStore.load(tmp_path))
-    assert loaded.store.meta == {"source": "test"}
+    assert loaded.store.meta == {"source": "test", "fingerprint": store.fingerprint()}
     for pid in store.ids.tolist():
         assert loaded.find_similar(pid, 4) == SimilarityEngine(store).find_similar(pid, 4)

@@ -70,6 +70,10 @@ jobs:
           test "$code" = 404
           docker rm -f api
 
+      - name: Part 1 function works inside the image
+        run: |
+          docker run --rm "$IMAGE" python -c "from similarity.engine import find_similar_products as f; r = f('80e47075f39a4bdf6b83f2d7690c95fe', 5); assert len(r) == 5, r; print(r)"
+
       - uses: helm/kind-action@v1
         with:
           cluster_name: similarity
